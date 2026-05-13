@@ -1,0 +1,79 @@
+name: Deploy Moodle to Dev
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_upgrade:
+        description: 'Skip database upgrade (code-only deploy)'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to dev503.sylr.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: deploy
+          key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            set -euo pipefail
+            MOODLE_DIR="/var/www/moodle"
+
+            echo "=== Pulling latest code ==="
+            cd "$MOODLE_DIR"
+            sudo git fetch origin main
+            sudo git reset --hard origin/main
+            sudo git submodule sync --recursive
+            sudo git submodule update --init --recursive
+
+            echo "=== Fixing permissions ==="
+            WEB_USER=$(stat -c '%U' "$MOODLE_DIR/index.php" 2>/dev/null || echo "www-data")
+            sudo chown -R "$WEB_USER:$WEB_USER" "$MOODLE_DIR"
+
+            if [[ "${{ inputs.skip_upgrade }}" != "true" ]]; then
+              echo "=== Enabling maintenance mode ==="
+              sudo php admin/cli/maintenance.php --enable
+
+              echo "=== Running database upgrade ==="
+              sudo php admin/cli/upgrade.php --non-interactive --allow-unstable
+
+              echo "=== Disabling maintenance mode ==="
+              sudo php admin/cli/maintenance.php --disable
+            fi
+
+            echo "=== Purging caches ==="
+            sudo php admin/cli/purge_caches.php
+
+            echo "=== Deploy complete ==="
+
+      - name: Notify on failure
+        if: failure()
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: deploy
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd /var/www/moodle
+            sudo php admin/cli/maintenance.php --disable 2>/dev/null || true
+            echo "Deploy failed — maintenance mode disabled as safety measure"
