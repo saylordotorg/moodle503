@@ -178,8 +178,12 @@ server {
         fastcgi_read_timeout 300;
     }
 
-    location ~ [^/]\.php(/|$) {
+    location ~ ^(?<phpscript>.+?\.php)(/|$) {
         fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        # Moodle 5.x router: non-existent .php paths go to r.php
+        if (!-f $document_root$phpscript) {
+            rewrite ^ /r.php$uri last;
+        }
         fastcgi_pass unix:/run/php/php8.3-fpm.sock;
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;

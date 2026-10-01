@@ -1,0 +1,67 @@
+server {
+    server_name dev503.sylr.org;
+    root /var/www/moodle/public;
+    index index.php index.html;
+
+    access_log /var/log/nginx/dev503.sylr.org_access.log;
+    error_log  /var/log/nginx/dev503.sylr.org_error.log;
+
+    client_max_body_size 256M;
+
+    location ~ /\.git {
+        deny all;
+        return 404;
+    }
+    location ~ /deploy {
+        deny all;
+        return 404;
+    }
+
+    location / {
+        try_files $uri $uri/ /r.php$uri?$query_string;
+    }
+
+
+    location = /r.php {
+        fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include fastcgi_params;
+        fastcgi_param PATH_INFO $fastcgi_path_info;
+        fastcgi_read_timeout 300;
+    }
+
+    location ~ ^(?<phpscript>.+?\.php)(/|$) {
+        fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        # Moodle 5.x router: non-existent .php paths go to r.php
+        if (!-f $document_root$phpscript) {
+            rewrite ^ /r.php$uri last;
+        }
+        fastcgi_index index.php;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param PATH_INFO $fastcgi_path_info;
+        fastcgi_read_timeout 300;
+        fastcgi_param PHP_VALUE "max_execution_time=300";
+    }
+
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    listen 443 ssl;
+    ssl_certificate /etc/letsencrypt/live/dev503.sylr.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/dev503.sylr.org/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+}
+server {
+    listen 80;
+    server_name dev503.sylr.org;
+    return 301 https://$host$request_uri;
+}
+
