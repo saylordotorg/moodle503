@@ -28,12 +28,18 @@ import {debounce} from 'core/utils';
 import {isSmall, isLarge} from 'core/pagehelpers';
 import Pending from 'core/pending';
 import {setUserPreference} from 'core_user/repository';
-import Tooltip from './bootstrap/tooltip';
-import * as FocusLock from 'core/local/aria/focuslock';
+import {Tooltip} from 'bootstrap';
+import {subscribe} from 'core/pubsub';
+import DrawerEvents from 'core/drawer_events';
 
 let backdropPromise = null;
 
 const drawerMap = new Map();
+
+// Drawers closed per-region in response to DrawerEvents.DRAWER_EXCLUSIVE_REQUESTED, to be reopened on
+// DrawerEvents.DRAWER_EXCLUSIVE_RELEASED for that same region. Only one requester per region is
+// supported at a time.
+const drawersClosedForExclusiveRequest = new Map();
 
 const SELECTORS = {
     BUTTONS: '[data-toggler="drawers"]',
@@ -43,6 +49,10 @@ const SELECTORS = {
     DRAWERS: '[data-region="fixed-drawer"]',
     DRAWERCONTENT: '.drawercontent',
     PAGECONTENT: '#page-content',
+    NAVBAR: '.navbar.fixed-top',
+    OPEN_DROPDOWN_MENU: '.dropdown-menu.show',
+    OPEN_DROPDOWN_TOGGLE: '[data-bs-toggle="dropdown"].show',
+    RIGHTDRAWER: '.drawer.drawer-right',
 };
 
 const CLASSES = {
@@ -204,6 +214,45 @@ const addInnerScrollListener = (drawerNode) => {
             CLASSES.SCROLLED,
             content.scrollTop != 0
         );
+    });
+};
+
+/**
+ * Expand a content-sized drawer just enough to contain an open dropdown.
+ *
+ * Only content-sized drawers can grow. A scrollable drawer is already
+ * constrained by its maximum height.
+ *
+ * @param {HTMLElement} toggle The dropdown toggle.
+ * @private
+ */
+const expandDrawerForDropdown = (toggle) => {
+    const drawer = toggle.closest(SELECTORS.RIGHTDRAWER);
+    const drawerContent = drawer?.querySelector(`:scope > ${SELECTORS.DRAWERCONTENT}`);
+    if (!drawerContent) {
+        return;
+    }
+
+    // Wait until Bootstrap has displayed the menu and Popper has positioned it.
+    requestAnimationFrame(() => {
+        const menu = toggle.nextElementSibling;
+        if (!menu?.matches(SELECTORS.OPEN_DROPDOWN_MENU)) {
+            return;
+        }
+
+        const drawerHeight = drawer.getBoundingClientRect().height;
+        const maxHeight = parseFloat(getComputedStyle(drawer).maxHeight);
+        if (!Number.isFinite(maxHeight) || drawerHeight >= maxHeight - 1) {
+            return;
+        }
+
+        const overflow = Math.ceil(menu.getBoundingClientRect().bottom - drawerContent.getBoundingClientRect().bottom);
+        if (overflow <= 0) {
+            return;
+        }
+
+        const height = Math.min(drawerHeight + overflow, maxHeight);
+        drawer.style.height = `${height}px`;
     });
 };
 
@@ -465,11 +514,6 @@ export default class Drawers {
             if (focusOnCloseButton) {
                 closeButton.focus();
             }
-            // On small devices, the drawer must have a trap focus once the focus is inside
-            // to prevent the user from focussing on covered elements.
-            if (isSmall()) {
-                FocusLock.trapFocus(this.drawerNode);
-            }
             pendingPromise.resolve();
         }, 300);
 
@@ -491,6 +535,8 @@ export default class Drawers {
         if (hideEvent.defaultPrevented) {
             return;
         }
+
+        this.drawerNode.style.removeProperty('height');
 
         // Hide close button and header content while the drawer is hiding to prevent glitchy effects.
         const closeButton = this.drawerNode.querySelector(SELECTORS.CLOSEBTN);
@@ -526,9 +572,6 @@ export default class Drawers {
                 return;
         });
 
-        if (isSmall()) {
-            FocusLock.untrapFocus();
-        }
         // Move focus to the open drawer (or toggler) button once the drawer is hidden.
         let openButton = getDrawerOpenButton(this.drawerNode.id);
         if (openButton) {
@@ -636,10 +679,14 @@ export default class Drawers {
 
     /**
      * Close all drawers.
+     *
+     * @param {object} [args] Options forwarded to each drawer's closeDrawer call.
+     * @param {boolean} [args.focusOnOpenButton=true] Whether to move focus back to the open button.
+     * @param {boolean} [args.updatePreferences=true] Whether to update the user preference.
      */
-    static closeAllDrawers() {
+    static closeAllDrawers(args = {}) {
         drawerMap.forEach(drawerInstance => {
-            drawerInstance.closeDrawer();
+            drawerInstance.closeDrawer(args);
         });
     }
 
@@ -713,6 +760,14 @@ const focusLastUsedToggle = (target) => {
 };
 
 /**
+ * Whether any drawer is currently open.
+ *
+ * @returns {boolean}
+ * @private
+ */
+const isAnyDrawerOpen = () => [...drawerMap.values()].some(drawerInstance => drawerInstance.isOpen);
+
+/**
  * Register the event listeners for the drawer.
  *
  * @private
@@ -749,6 +804,43 @@ const registerListeners = () => {
             drawerInstance.closeDrawer();
             focusLastUsedToggle(closeDrawerButton.dataset.target);
         }
+
+        // On small screens the drawers open below the navbar (see MDL-89076),
+        // which remains visible and interactive while a drawer is open. Any
+        // interaction with the navbar (search, edit toggle, user menu, etc.),
+        // other than a drawer toggle button, should close the open drawer,
+        // just like clicking the backdrop over the page content does.
+        // Focus is left on the clicked navbar element rather than moved back
+        // to the drawer's open button.
+        if (isSmall() && e.target.closest(SELECTORS.NAVBAR) && !e.target.closest(SELECTORS.BUTTONS)) {
+            if (isAnyDrawerOpen()) {
+                Drawers.closeAllDrawers({focusOnOpenButton: false});
+            }
+        }
+    });
+
+    // On small screens the drawers are not modal: focus is not trapped inside
+    // them (see MDL-89076). Moving keyboard focus out of an open drawer, e.g.
+    // tabbing to the navbar, dismisses it, mirroring how interacting with the
+    // navbar by mouse closes it. Focus stays on the element the user moved to.
+    document.addEventListener('focusin', e => {
+        if (!isSmall() || !isAnyDrawerOpen()) {
+            return;
+        }
+        // Focus staying inside a drawer, or moving onto a drawer toggle button
+        // (whose own handler manages the drawer state), must not dismiss it.
+        if (e.target.closest(SELECTORS.DRAWERS) || e.target.closest(SELECTORS.BUTTONS)) {
+            return;
+        }
+        Drawers.closeAllDrawers({focusOnOpenButton: false});
+    });
+
+    document.addEventListener('show.bs.dropdown', e => {
+        expandDrawerForDropdown(e.target);
+    });
+
+    document.addEventListener('hidden.bs.dropdown', e => {
+        e.target.closest(SELECTORS.RIGHTDRAWER)?.style.removeProperty('height');
     });
 
     // Close drawer when another drawer opens.
@@ -757,6 +849,30 @@ const registerListeners = () => {
             return;
         }
         Drawers.closeOtherDrawers(e.detail.drawerInstance);
+    });
+
+    // Close open drawers on the requested side (left or right) for a requester that needs exclusive
+    // use of the screen space they occupy, and remember which ones to reopen once released.
+    subscribe(DrawerEvents.DRAWER_EXCLUSIVE_REQUESTED, ({region} = {}) => {
+        const closedDrawers = [...drawerMap.values()].filter(
+            drawerInstance => drawerInstance.isOpen && drawerInstance.drawerNode.classList.contains(`drawer-${region}`)
+        );
+        closedDrawers.forEach(drawerInstance => {
+            drawerInstance.closeDrawer({focusOnOpenButton: false, updatePreferences: false});
+        });
+        drawersClosedForExclusiveRequest.set(region, closedDrawers);
+    });
+
+    // Reopen drawers closed for DrawerEvents.DRAWER_EXCLUSIVE_REQUESTED on this region, unless
+    // something else already changed their state in the meantime (e.g. the user opened one manually).
+    subscribe(DrawerEvents.DRAWER_EXCLUSIVE_RELEASED, ({region} = {}) => {
+        const closedDrawers = drawersClosedForExclusiveRequest.get(region) ?? [];
+        closedDrawers.forEach(drawerInstance => {
+            if (!drawerInstance.isOpen) {
+                drawerInstance.openDrawer({focusOnCloseButton: false, setUserPref: false});
+            }
+        });
+        drawersClosedForExclusiveRequest.delete(region);
     });
 
     // Tooglers and openers blur listeners.
@@ -769,6 +885,18 @@ const registerListeners = () => {
     });
 
     const closeOnResizeListener = () => {
+        drawerMap.forEach(drawerInstance => {
+            const drawerNode = drawerInstance.drawerNode;
+            if (!drawerNode.matches(SELECTORS.RIGHTDRAWER)) {
+                return;
+            }
+            const openDropdown = drawerNode.querySelector(SELECTORS.OPEN_DROPDOWN_TOGGLE);
+            drawerNode.style.removeProperty('height');
+            if (openDropdown) {
+                expandDrawerForDropdown(openDropdown);
+            }
+        });
+
         if (isSmall()) {
             let anyOpen = false;
             drawerMap.forEach(drawerInstance => {

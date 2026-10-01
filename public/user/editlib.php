@@ -252,7 +252,7 @@ function useredit_shared_definition(&$mform, $editoroptions, $filemanageroptions
 
     // Add the necessary names.
     foreach (useredit_get_required_name_fields() as $fullname) {
-        $purpose = user_edit_map_field_purpose($user->id, $fullname);
+        $purpose = \core\user::edit_map_field_purpose($user->id, $fullname);
         $mform->addElement('text', $fullname,  get_string($fullname),  'maxlength="100" size="30"' . $purpose);
         if ($stringman->string_exists('missing'.$fullname, 'core')) {
             $strmissingfield = get_string('missing'.$fullname, 'core');
@@ -266,7 +266,7 @@ function useredit_shared_definition(&$mform, $editoroptions, $filemanageroptions
     $enabledusernamefields = useredit_get_enabled_name_fields();
     // Add the enabled additional name fields.
     foreach ($enabledusernamefields as $addname) {
-        $purpose = user_edit_map_field_purpose($user->id, $addname);
+        $purpose = \core\user::edit_map_field_purpose($user->id, $addname);
         $mform->addElement('text', $addname,  get_string($addname), 'maxlength="100" size="30"' . $purpose);
         $mform->setType($addname, PARAM_NOTAGS);
     }
@@ -278,7 +278,7 @@ function useredit_shared_definition(&$mform, $editoroptions, $filemanageroptions
                 . get_string('emailchangecancel', 'auth') . '</a>';
         $mform->addElement('static', 'emailpending', get_string('email'), $notice);
     } else {
-        $purpose = user_edit_map_field_purpose($user->id, 'email');
+        $purpose = \core\user::edit_map_field_purpose($user->id, 'email');
         $mform->addElement('text', 'email', get_string('email'), 'maxlength="100" size="30"' . $purpose);
         $mform->addRule('email', $strrequired, 'required', null, 'client');
         $mform->setType('email', PARAM_RAW_TRIMMED);
@@ -298,7 +298,7 @@ function useredit_shared_definition(&$mform, $editoroptions, $filemanageroptions
         $mform->setDefault('city', $CFG->defaultcity);
     }
 
-    $purpose = user_edit_map_field_purpose($user->id, 'country');
+    $purpose = \core\user::edit_map_field_purpose($user->id, 'country');
     $choices = get_string_manager()->get_list_of_countries();
     $choices = array('' => get_string('selectacountry') . '...') + $choices;
     $mform->addElement('select', 'country', get_string('selectacountry'), $choices, $purpose);
@@ -317,7 +317,7 @@ function useredit_shared_definition(&$mform, $editoroptions, $filemanageroptions
     }
 
     if ($user->id < 0) {
-        $purpose = user_edit_map_field_purpose($user->id, 'lang');
+        $purpose = \core\user::edit_map_field_purpose($user->id, 'lang');
         $translations = get_string_manager()->get_list_of_translations();
         $mform->addElement('select', 'lang', get_string('preferredlanguage'), $translations, $purpose);
         $lang = empty($user->lang) ? $CFG->lang : $user->lang;
@@ -366,7 +366,7 @@ function useredit_shared_definition(&$mform, $editoroptions, $filemanageroptions
     if (count($disabledusernamefields) > 0) {
         $mform->addElement('header', 'moodle_additional_names', get_string('additionalnames'));
         foreach ($disabledusernamefields as $allname) {
-            $purpose = user_edit_map_field_purpose($user->id, $allname);
+            $purpose = \core\user::edit_map_field_purpose($user->id, $allname);
             $mform->addElement('text', $allname, get_string($allname), 'maxlength="100" size="30"' . $purpose);
             $mform->setType($allname, PARAM_NOTAGS);
         }
@@ -482,4 +482,31 @@ function useredit_get_disabled_name_fields($enabledadditionalusernames = null) {
         $result[$field] = $field;
     }
     return $result;
+}
+
+/**
+ * Validate the length of the user profile description field.
+ *
+ * Shared by user_edit_form and user_editadvanced_form to ensure consistent
+ * validation of the description_editor field length.
+ *
+ * The limit can be overridden in config.php by setting USER_DESCRIPTION_MAX_LENGTH constant.
+ *
+ * @param array $data Form data submitted by the user.
+ * @return array Validation errors, keyed by field name. Empty if valid.
+ */
+function useredit_validate_description_length(array $data): array {
+    if (defined('USER_DESCRIPTION_MAX_LENGTH')) {
+        $maxlength = USER_DESCRIPTION_MAX_LENGTH;
+    } else {
+        // Default maximum character length for a user profile description.
+        $maxlength = 50000;
+    }
+    $errors = [];
+    if (!empty($data['description_editor']['text'])) {
+        if (core_text::strlen($data['description_editor']['text']) > $maxlength) {
+            $errors['description_editor'] = get_string('maximumchars', '', $maxlength);
+        }
+    }
+    return $errors;
 }

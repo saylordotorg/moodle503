@@ -221,6 +221,15 @@ $tasks = array(
         'dayofweek' => 'R',
         'month' => '*'
     ),
+    [
+        'classname' => 'core\task\registration_reporting_check_task',
+        'blocking' => 0,
+        'minute' => 'R',
+        'hour' => 'R',
+        'day' => '*',
+        'dayofweek' => '*',
+        'month' => '*',
+    ],
     array(
         'classname' => 'core\task\check_for_updates_task',
         'blocking' => 0,
@@ -481,6 +490,16 @@ $tasks = array(
         'blocking' => 0,
         'minute' => '00',
         'hour' => '01',
+        'day' => '*',
+        'dayofweek' => '*',
+        'month' => '*',
+        'disabled' => false,
+    ],
+    [
+        'classname' => 'core\task\cache_filepool_usage_task',
+        'blocking' => 0,
+        'minute' => 'R',
+        'hour' => '0',
         'day' => '*',
         'dayofweek' => '*',
         'month' => '*',

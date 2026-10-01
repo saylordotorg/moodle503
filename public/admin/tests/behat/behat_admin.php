@@ -133,4 +133,40 @@ class behat_admin extends behat_base {
             $this->getSession()->wait($timeout, $javascript);
         }
     }
+
+    /**
+     * Registers the site with moodle.org for testing purposes, without contacting the hub.
+     *
+     * @Given /^the site is registered with moodle\.org$/
+     */
+    public function the_site_is_registered_with_moodleorg(): void {
+        global $DB;
+
+        // Behat sites run on localhost, so force the public check a registered site would normally pass.
+        set_config('site_is_public', 1);
+        $DB->insert_record('registration_hubs', [
+            'token' => 'behattoken',
+            'hubname' => 'Moodle.org',
+            'huburl' => HUB_MOODLEORGHUBURL,
+            'confirmed' => 1,
+            'secret' => 'behatsecret',
+            'timemodified' => time(),
+        ]);
+        set_config('site_regupdateversion', max(array_keys(\core\hub\registration::CONFIRM_NEW_FIELDS)), 'hub');
+    }
+
+    /**
+     * Sets pathtophp to the PHP binary.
+     *
+     * @Given /^the PHP CLI path is set to the system PHP binary$/
+     */
+    public function the_php_cli_path_is_set_to_the_system_php_binary(): void {
+        $pathtophp = realpath(PHP_BINARY);
+
+        if (!$pathtophp || !is_file($pathtophp)) {
+            throw new Exception('PHP CLI binary could not be resolved.');
+        }
+
+        set_config('pathtophp', $pathtophp);
+    }
 }

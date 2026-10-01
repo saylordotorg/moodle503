@@ -93,6 +93,11 @@ if (!is_null(optional_param('resetadv', null, PARAM_RAW))) {
 }
 
 $advanced = optional_param('advanced', -1, PARAM_INT);
+if (optional_param('reset', 0, PARAM_BOOL)) {
+    unset($SESSION->dataprefs[$data->id]);
+    // We need the redirect to cleanup the form state properly.
+    redirect("view.php?id=$cm->id&amp;mode=$mode&amp;search=&amp;advanced=$advanced");
+}
 if ($advanced == -1) {
     $advanced = $SESSION->dataprefs[$data->id]['advanced'];
 } else {
@@ -299,6 +304,7 @@ if ($delete && data_user_can_manage_entry($delete, $data, $context)) {
                                                         JOIN {user} u ON dr.userid = u.id
                                                   WHERE dr.id = ?", $dbparams, MUST_EXIST)) { // Need to check this is valid.
             if ($deleterecord->dataid == $data->id) {                       // Must be from this database
+                $PAGE->set_show_navigation_footer(false);
                 echo $OUTPUT->heading(get_string('deleteentry', 'mod_data'), 2, 'mb-4');
                 $deletebutton = new single_button(
                     new moodle_url('/mod/data/view.php?d=' . $data->id . '&delete=' . $delete . '&confirm=1'),
@@ -454,7 +460,7 @@ if ($showactivity) {
                 $a = new stdClass();
                 $a->num = $totalcount;
                 $a->max = $maxcount;
-                $a->reseturl = "view.php?id=$cm->id&amp;mode=$mode&amp;search=&amp;advanced=0";
+                $a->reseturl = "view.php?id=$cm->id&amp;mode=$mode&amp;search=&amp;reset=1&amp;advanced=$advanced";
                 echo $OUTPUT->box_start();
                 echo get_string('foundrecords', 'data', $a);
                 echo $OUTPUT->box_end();

@@ -1,5 +1,42 @@
 # core_courseformat (subsystem / plugintype) Upgrade notes
 
+## 5.3rc1
+
+### Added
+
+- The `\core_courseformat\base::uses_linear_navigation()` method has been introduced to determine if a format supports linear navigation. Formats should override this to return true (optionally via a format setting) to enable the feature; it remains disabled by default.
+
+  For more information see [MDL-87302](https://tracker.moodle.org/browse/MDL-87302)
+- Two new steps have been added to simplify testing of linear navigation: the course linear navigation should/should not be visible
+
+  For more information see [MDL-87575](https://tracker.moodle.org/browse/MDL-87575)
+- Add a inline_help flag for course format setting elements.  When this flag is present in the setting definition, or set to true,  the help text is displayed as static text beneath the setting.
+
+  For more information see [MDL-88669](https://tracker.moodle.org/browse/MDL-88669)
+
+### Changed
+
+- The course index tree semantics for subsections have moved from the delegated section wrapper to the activity that delegates it.
+
+  * The `li[role="treeitem"]` in `core_courseformat/local/courseindex/cm` should add the following attributes when the activity has a delegated section:
+    * `aria-owns`, set to the id of that section's collapsible content, `courseindexcollapse{{number}}`
+    * `aria-labelledby`, set to the id of that section's title element, `courseindexsection{{number}}-title`
+    * `aria-expanded`, set to `false` when the section's `indexcollapsed` is set and `true` otherwise
+  * In `core_courseformat/local/courseindex/section`, `role="treeitem"` and those same three attributes should no longer be set when the section is delegated, and the section title element needs `id="courseindexsection{{number}}-title"` so the tree item can reference it.
+
+  Note that the `core_courseformat/local/courseindex/section` JS keeps `aria-expanded` up to date by writing to the closest `[role="treeitem"]` ancestor, so the element carrying the role is the one that receives the state. Plugins overriding either template should update both, as the two are no longer independent.
+
+  For more information see [MDL-88949](https://tracker.moodle.org/browse/MDL-88949)
+- The collapse/expand-all toggle rendered by the core_courseformat/local/content template no longer has the collapsesections id. Use the [data-toggle="toggleall"] selector to target it instead.
+
+  For more information see [MDL-89496](https://tracker.moodle.org/browse/MDL-89496)
+
+### Deprecated
+
+- The section collapse/expand-all toggle (collapsemenu) in core_courseformat\output\local\content\section and in the core_courseformat/local/content/section/content template is deprecated. It is still exported and rendered so that course formats and themes overriding the core_courseformat/local/content template keep working, but the toggle is now part of core_courseformat\output\local\content and the core_courseformat/local/content template, which suppresses the deprecated markup by overriding the core_courseformat/local/content/section/collapsemenu block. Course formats and themes overriding core_courseformat/local/content should update their copy to render the toggle above the section list.
+
+  For more information see [MDL-89496](https://tracker.moodle.org/browse/MDL-89496)
+
 ## 5.2
 
 ### Added

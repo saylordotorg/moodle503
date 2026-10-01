@@ -33,7 +33,7 @@
             throw new \moodle_exception('nousers');
         }
 
-        $auth = get_auth_plugin($user->auth);
+        $auth = \core\di::get(\core\authentication::class)->get_plugin($user->auth);
 
         $result = $auth->user_confirm($user->username, $user->secret);
 
@@ -132,7 +132,7 @@
                 $user->suspended = 1;
                 // Force logout.
                 \core\session\manager::destroy_user_sessions($user->id);
-                user_update_user($user, false);
+                \core\user::update_user($user, false);
             }
         }
         redirect($returnurl);
@@ -143,7 +143,7 @@
         if ($user = $DB->get_record('user', array('id'=>$unsuspend, 'mnethostid'=>$CFG->mnet_localhost_id, 'deleted'=>0))) {
             if ($user->suspended != 0) {
                 $user->suspended = 0;
-                user_update_user($user, false);
+                \core\user::update_user($user, false);
             }
         }
         redirect($returnurl);

@@ -43,6 +43,35 @@ class engine extends \core_search\engine {
     protected $totalresults = null;
 
     /**
+     * MySQL InnoDB minimum full-text token size.
+     *
+     * @var null|int
+     */
+    private ?int $mysqlmintokensize = null;
+
+    /**
+     * Cached lower-case fulltext-search stopwords for the current database, or null if not yet computed.
+     *
+     * @var string[]|null
+     */
+    private ?array $stopwords = null;
+
+    /**
+     * MySQL/MariaDB InnoDB's built-in default full-text stopword list, applied when
+     * innodb_ft_server_stopword_table is not customised. This list is fixed by the server and not
+     * user-configurable, so it is hardcoded here rather than read from
+     * INFORMATION_SCHEMA.INNODB_FT_DEFAULT_STOPWORD, which requires the PROCESS privilege and is
+     * therefore unavailable to the restricted database user a typical Moodle site connects with.
+     *
+     * @var string[]
+     */
+    private const MYSQL_DEFAULT_STOPWORDS = [
+        'a', 'about', 'an', 'are', 'as', 'at', 'be', 'by', 'com', 'de', 'en', 'for', 'from', 'how',
+        'i', 'in', 'is', 'it', 'la', 'of', 'on', 'or', 'that', 'the', 'this', 'to', 'was', 'what',
+        'when', 'where', 'who', 'will', 'with', 'und', 'www',
+    ];
+
+    /**
      * Prepares a SQL query, applies filters and executes it returning its results.
      *
      * @throws \core_search\engine_exception
@@ -130,52 +159,61 @@ class engine extends \core_search\engine {
         if (!empty($filters->q)) {
             switch ($DB->get_dbfamily()) {
                 case 'postgres':
+                    $postgresquery = $this->get_fulltext_query($filters->q);
+                    if ($postgresquery === '') {
+                        return [];
+                    }
+
                     $ands[] = "(" .
-                        "to_tsvector('simple', title) @@ plainto_tsquery('simple', ?) OR ".
-                        "to_tsvector('simple', content) @@ plainto_tsquery('simple', ?) OR ".
-                        "to_tsvector('simple', description1) @@ plainto_tsquery('simple', ?) OR ".
-                        "to_tsvector('simple', description2) @@ plainto_tsquery('simple', ?)".
-                        ")";
-                    $params[] = $filters->q;
-                    $params[] = $filters->q;
-                    $params[] = $filters->q;
-                    $params[] = $filters->q;
+                        "to_tsvector('simple', title) @@ to_tsquery('simple', ?) OR " .
+                        "to_tsvector('simple', content) @@ to_tsquery('simple', ?) OR " .
+                        "to_tsvector('simple', description1) @@ to_tsquery('simple', ?) OR " .
+                        "to_tsvector('simple', description2) @@ to_tsquery('simple', ?))";
+
+                    $params[] = $postgresquery;
+                    $params[] = $postgresquery;
+                    $params[] = $postgresquery;
+                    $params[] = $postgresquery;
                     break;
+
                 case 'mysql':
                     if ($DB->is_fulltext_search_supported()) {
-                        $ands[] = "MATCH (title, content, description1, description2) AGAINST (?)";
-                        $params[] = $filters->q;
-
-                        // Sorry for the hack, but it does not seem that we will have a solution for
-                        // this soon (https://bugs.mysql.com/bug.php?id=78485).
-                        if ($filters->q === '*') {
-                            return array();
+                        $mysqlquery = $this->get_fulltext_query($filters->q);
+                        if ($mysqlquery === '') {
+                            return [];
                         }
+
+                        $ands[] = "(MATCH (title, content, description1, description2) AGAINST (? IN BOOLEAN MODE))";
+                        $params[] = $mysqlquery;
                     } else {
-                        // Clumsy version for mysql versions with no fulltext support.
-                        list($queryand, $queryparams) = $this->get_simple_query($filters->q);
-                        $ands[] = $queryand;
-                        $params = array_merge($params, $queryparams);
+                        // Fallback when full-text is not supported.
+                        [$simplequeryand, $simplequeryparams] = $this->get_simple_query($filters->q);
+                        $ands[] = $simplequeryand;
+                        $params = array_merge($params, $simplequeryparams);
                     }
                     break;
+
                 case 'mssql':
                     if ($DB->is_fulltext_search_supported()) {
+                        $mssqlquery = $this->get_fulltext_query($filters->q);
+                        if ($mssqlquery === '') {
+                            return [];
+                        }
+
                         $ands[] = "CONTAINS ((title, content, description1, description2), ?)";
-                        // Special treatment for double quotes:
-                        // - Puntuation is ignored so we can get rid of them.
-                        // - Phrases should be enclosed in double quotation marks.
-                        $params[] = '"' . str_replace('"', '', $filters->q) . '"';
+                        $params[] = $mssqlquery;
                     } else {
-                        // Clumsy version for mysql versions with no fulltext support.
-                        list($queryand, $queryparams) = $this->get_simple_query($filters->q);
-                        $ands[] = $queryand;
-                        $params = array_merge($params, $queryparams);
+                        // Fallback when full-text is not supported.
+                        [$simplequeryand, $simplequeryparams] = $this->get_simple_query($filters->q);
+                        $ands[] = $simplequeryand;
+                        $params = array_merge($params, $simplequeryparams);
                     }
                     break;
+
                 default:
-                    list($queryand, $queryparams) = $this->get_simple_query($filters->q);
-                    $ands[] = $queryand;
-                    $params = array_merge($params, $queryparams);
+                    [$simplequeryand, $simplequeryparams] = $this->get_simple_query($filters->q);
+                    $ands[] = $simplequeryand;
+                    $params = array_merge($params, $simplequeryparams);
                     break;
             }
         }
@@ -357,6 +395,183 @@ class engine extends \core_search\engine {
         ];
 
         return array($sql, $params);
+    }
+
+    /**
+     * Get a full-text query according to the requirements of the current database.
+     *
+     * @param string $q The query string
+     * @return string The full-text query
+     */
+    private function get_fulltext_query(string $q): string {
+        global $DB;
+        // Normalise typographic apostrophes to a plain apostrophe.
+        $q = preg_replace('/[\x{2018}\x{2019}]/u', "'", $q);
+        // Remove apostrophes and everything after them within each token.
+        $q = preg_replace("/'[^\\s]*/u", '', $q);
+        // Split the query into individual words on whitespace boundaries.
+        $parts = preg_split('/\s+/u', trim($q));
+
+        if (!$parts) {
+            return '';
+        }
+
+        // For MySQL, tokens shorter than innodb_ft_min_token_size are never indexed, so
+        // including them as required (+) boolean-mode terms returns zero rows.
+        $dbfamily = $DB->get_dbfamily();
+        if ($dbfamily === 'mysql' && $this->mysqlmintokensize === null) {
+            try {
+                $this->mysqlmintokensize = (int) $DB->get_field_sql('SELECT @@innodb_ft_min_token_size');
+            } catch (\dml_exception $e) {
+                $this->mysqlmintokensize = 3; // InnoDB default.
+            }
+        }
+
+        // MySQL and MSSQL do not index fulltext stopwords, so including one as a required
+        // (MySQL boolean-mode +term, MSSQL CONTAINS AND term) conjunct returns zero rows even
+        // though the rest of the phrase matches. Drop them from the term list instead.
+        $stopwords = in_array($dbfamily, ['mysql', 'mssql'], true) ? $this->get_stopwords() : [];
+
+        $terms = [];
+        foreach ($parts as $part) {
+            // Strip any remaining non-letter, non-number characters from each word.
+            $term = preg_replace('/[^\pL\pN_]+/u', '', $part);
+            if ($term === '') {
+                continue;
+            }
+            if ($stopwords && in_array(\core_text::strtolower($term), $stopwords, true)) {
+                continue;
+            }
+            switch ($dbfamily) {
+                case 'postgres':
+                    $terms[] = $term . ':*';
+                    break;
+                case 'mysql':
+                    // Skip tokens that are too short to be indexed.
+                    if (\core_text::strlen($term) >= $this->mysqlmintokensize) {
+                        $terms[] = '+' . $term . '*';
+                    }
+                    break;
+                case 'mssql':
+                    $terms[] = '"' . $term . '*"';
+                    break;
+            }
+        }
+
+        if (!$terms) {
+            return '';
+        }
+
+        switch ($dbfamily) {
+            case 'postgres':
+                // Join terms with the tsquery AND operator so all terms must match.
+                return implode(' & ', $terms);
+            case 'mysql':
+                // Join terms with spaces; the + prefix on each term enforces AND semantics.
+                return implode(' ', $terms);
+            case 'mssql':
+                // Join terms with AND to enforce all-terms-must-match semantics.
+                return implode(' AND ', $terms);
+            default:
+                return '';
+        }
+    }
+
+    /**
+     * Returns the fulltext-search stopwords configured for the current database, in lower case.
+     *
+     * Only MySQL and MSSQL are queried; other database families do not strip stopwords from the
+     * fulltext index (PostgreSQL's 'simple' text search configuration used here does not either).
+     *
+     * @return string[] Lower-case stopwords, or an empty array if none apply or could be determined.
+     */
+    private function get_stopwords(): array {
+        global $DB;
+
+        if ($this->stopwords !== null) {
+            return $this->stopwords;
+        }
+
+        try {
+            switch ($DB->get_dbfamily()) {
+                case 'mysql':
+                    $this->stopwords = $this->get_mysql_stopwords();
+                    break;
+                case 'mssql':
+                    $this->stopwords = $this->get_mssql_stopwords();
+                    break;
+                default:
+                    $this->stopwords = [];
+            }
+        } catch (\dml_exception $e) {
+            // If the stopword list cannot be determined, fall back to not filtering anything.
+            $this->stopwords = [];
+        }
+
+        return $this->stopwords;
+    }
+
+    /**
+     * Returns the InnoDB fulltext stopwords configured for the current MySQL/MariaDB server.
+     *
+     * @return string[] Lower-case stopwords.
+     */
+    private function get_mysql_stopwords(): array {
+        global $DB;
+
+        if (!(int) $DB->get_field_sql('SELECT @@innodb_ft_enable_stopword')) {
+            // Stopword filtering is disabled server-side, so nothing is excluded from the index.
+            return [];
+        }
+
+        if (trim((string) $DB->get_field_sql('SELECT @@innodb_ft_server_stopword_table')) !== '') {
+            // A custom stopword table is configured server-side; its contents are not queried
+            // here, so leave filtering to the pre-existing (unfiltered) behaviour for this case.
+            return [];
+        }
+
+        return self::MYSQL_DEFAULT_STOPWORDS;
+    }
+
+    /**
+     * Returns the fulltext stopwords configured for the stoplist attached to the search index,
+     * according to the current MSSQL server.
+     *
+     * @return string[] Lower-case stopwords.
+     */
+    private function get_mssql_stopwords(): array {
+        global $DB;
+
+        $tablename = $DB->get_prefix() . 'search_simpledb_index';
+        $stoplistid = $DB->get_field_sql(
+            'SELECT fi.stoplist_id FROM sys.fulltext_indexes fi WHERE fi.object_id = OBJECT_ID(?)',
+            [$tablename]
+        );
+
+        if ($stoplistid === false || $stoplistid === null) {
+            // No fulltext index found, or it has STOPLIST = OFF (nothing is excluded from the
+            // index, so there is nothing to filter out of the query either).
+            return [];
+        }
+
+        if ((int) $stoplistid === 0) {
+            // Stoplist id 0 is SQL Server's built-in system stoplist, which is what a fulltext
+            // index gets by default when no STOPLIST clause is given (as is the case for the
+            // search_simpledb index, see db/install.php). Its words are not listed in
+            // sys.fulltext_stopwords -- that view only covers stoplists created via CREATE
+            // FULLTEXT STOPLIST -- so look them up in sys.fulltext_system_stopwords instead,
+            // keyed by the language(s) configured on the index's columns.
+            $sql = "SELECT DISTINCT sw.stopword
+                      FROM sys.fulltext_index_columns fic
+                      JOIN sys.fulltext_system_stopwords sw ON sw.language_id = fic.language_id
+                     WHERE fic.object_id = OBJECT_ID(?)";
+            $words = $DB->get_fieldset_sql($sql, [$tablename]);
+        } else {
+            $sql = 'SELECT stopword FROM sys.fulltext_stopwords WHERE stoplist_id = ?';
+            $words = $DB->get_fieldset_sql($sql, [$stoplistid]);
+        }
+
+        return array_map('core_text::strtolower', $words);
     }
 
     /**

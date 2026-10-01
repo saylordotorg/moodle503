@@ -1176,7 +1176,7 @@ class core_course_category implements renderable, cacheable_object, IteratorAggr
         $ctxselect = context_helper::get_preload_record_columns_sql('ctx');
         $fields = array('c.id', 'c.category', 'c.sortorder',
                         'c.shortname', 'c.fullname', 'c.idnumber',
-                        'c.startdate', 'c.enddate', 'c.visible', 'c.cacherev');
+                        'c.startdate', 'c.enddate', 'c.visible', 'c.cacherev', 'c.deletioninprogress');
         if (!empty($options['summary'])) {
             $fields[] = 'c.summary';
             $fields[] = 'c.summaryformat';
@@ -2063,6 +2063,9 @@ class core_course_category implements renderable, cacheable_object, IteratorAggr
 
         // Delete all events in the category.
         $DB->delete_records('event', array('categoryid' => $this->id));
+
+        // Delete all event subscriptions in the category.
+        $DB->delete_records('event_subscriptions', ['categoryid' => $this->id]);
 
         // Finally delete the category and it's context.
         $categoryrecord = $this->get_db_record();

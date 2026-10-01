@@ -61,6 +61,7 @@ Please contact the site administrator immediately.';
 $string['confirmlinkedloginemailsubject'] = '{$a}: linked login confirmation';
 $string['createaccountswarning'] = 'This authentication plugin allows users to create accounts on your site. You may want to enable the setting "authpreventaccountcreation" if you use this plugin.';
 $string['createnewlinkedlogin'] = 'Link a new account ({$a})';
+$string['deleteexpiredconfirmtokens'] = 'Delete expired confirmation tokens';
 $string['emailconfirmlink'] = 'Link your accounts';
 $string['emailconfirmlinksent'] = '<p>An existing account was found with this email address but it is not linked yet.</p>
    <p>The accounts must be linked before you can log in.</p>
@@ -88,7 +89,7 @@ $string['loginerror_nouserinfo'] = 'No user information was returned. The OAuth 
 $string['loginerror_invaliddomain'] = 'The email address is not allowed at this site.';
 $string['loginerror_authenticationfailed'] = 'The authentication process failed.';
 $string['loginerror_cannotcreateaccounts'] = 'An account with your email address could not be found.';
-$string['noconfiguredidps'] = 'There are no configured OAuth2 providers.';
+$string['noconfiguredidps'] = 'There are no configured OAuth 2 providers.';
 $string['noissuersavailable'] = 'None of the configured OAuth 2 services allow you to link login accounts.';
 $string['notloggedindebug'] = 'The login attempt failed. Reason: {$a}';
 $string['notwhileloggedinas'] = 'Linked logins cannot be managed while logged in as another user.';

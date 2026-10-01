@@ -98,7 +98,19 @@ final class moodlelib_test extends \advanced_testcase {
 
         // Fixed input.
         $this->assertTrue(address_in_subnet('123.121.23.1   ', ' 123.121.23.0 / 24'));
-        $this->assertTrue(address_in_subnet('::ffff:10.1.1.1', ' 0:0:0:000:0:ffff:a1:10 / 126'));
+
+        // IPv4-mapped IPv6 addresses (::ffff:x.x.x.x) must match IPv4 subnet rules.
+        $this->assertTrue(address_in_subnet('::ffff:10.1.1.1', '10.1.1.0/30'));
+        $this->assertTrue(address_in_subnet('::ffff:127.0.0.1', '127.0.0.0/8'));
+        $this->assertTrue(address_in_subnet('::ffff:192.168.0.50', '192.168.0.0/16'));
+        $this->assertTrue(address_in_subnet('::ffff:169.254.169.254', '169.254.169.254'));
+        $this->assertTrue(address_in_subnet('::ffff:10.0.0.5', '10.0.0.1-10'));
+
+        // IPv4-mapped IPv6 addresses must still match subnet rules expressed in IPv6/mapped notation.
+        $this->assertTrue(address_in_subnet('::ffff:192.168.0.50', '::ffff:192.168.0.50'));
+        $this->assertTrue(address_in_subnet('::ffff:192.168.0.50', '::ffff:192.168.0.0/120'));
+        $this->assertTrue(address_in_subnet('::ffff:192.168.0.50', '::ffff:192.168.0.40-60'));
+        $this->assertTrue(address_in_subnet('::ffff:10.1.1.1', '0:0:0:000:0:ffff:a1:10/126'));
 
         // Incorrect input.
         $this->assertFalse(address_in_subnet('123.121.234.1', '123.121.234.1/-2'));
@@ -2687,23 +2699,6 @@ EOF;
     }
 
     /**
-     * Test function password_is_legacy_hash.
-     * @covers ::password_is_legacy_hash
-     */
-    public function test_password_is_legacy_hash(): void {
-        // Well formed bcrypt hashes should be matched.
-        foreach (array('some', 'strings', 'to_check!') as $password) {
-            $bcrypt = password_hash($password, '2y');
-            $this->assertTrue(password_is_legacy_hash($bcrypt));
-        }
-        // Strings that are not bcrypt should not be matched.
-        $sha512 = '$6$rounds=5000$somesalt$9nEA35u5h4oDrUdcVFUwXDSwIBiZtuKDHiaI/kxnBSslH4wVXeAhVsDn1UFxBxrnRJva/8dZ8IouaijJdd4cF';
-        foreach (array('', AUTH_PASSWORD_NOT_CACHED, $sha512) as $notbcrypt) {
-            $this->assertFalse(password_is_legacy_hash($notbcrypt));
-        }
-    }
-
-    /**
      * Test function that calculates password pepper entropy.
      * @covers ::calculate_entropy
      */
@@ -2713,288 +2708,6 @@ EOF;
 
         // Test that the function returns the correct entropy.
         $this->assertEquals(132.8814, number_format(calculate_entropy('#GV]NLie|x$H9[$rW%94bXZvJHa%z'), 4));
-    }
-
-    /**
-     * Test function to get password peppers.
-     * @covers ::get_password_peppers
-     */
-    public function test_get_password_peppers(): void {
-        global $CFG;
-        $this->resetAfterTest();
-
-        // First assert that the function returns an empty array,
-        // when no peppers are set.
-        $this->assertEquals([], get_password_peppers());
-
-        // Now set some peppers and check that they are returned.
-        $CFG->passwordpeppers = [
-                1 => '#GV]NLie|x$H9[$rW%94bXZvJHa%z',
-                2 => '#GV]NLie|x$H9[$rW%94bXZvJHa%$'
-        ];
-        $peppers = get_password_peppers();
-        $this->assertCount(2, $peppers);
-        $this->assertEquals($CFG->passwordpeppers, $peppers);
-
-        // Check that the peppers are returned in the correct order.
-        // Highest numerical key first.
-        $this->assertEquals('#GV]NLie|x$H9[$rW%94bXZvJHa%$', $peppers[2]);
-        $this->assertEquals('#GV]NLie|x$H9[$rW%94bXZvJHa%z', $peppers[1]);
-
-        // Update the latest pepper to be an empty string,
-        // to test phasing out peppers.
-        $CFG->passwordpeppers = [
-                1 => '#GV]NLie|x$H9[$rW%94bXZvJHa%z',
-                2 => '#GV]NLie|x$H9[$rW%94bXZvJHa%$',
-                3 => ''
-        ];
-        $peppers = get_password_peppers();
-        $this->assertCount(3, $peppers);
-        $this->assertEquals($CFG->passwordpeppers, $peppers);
-
-        // Finally, check that low entropy peppers throw an exception.
-        $CFG->passwordpeppers = [
-                1 => 'foo',
-                2 => 'bar'
-        ];
-        $this->expectException(\coding_exception::class);
-        get_password_peppers();
-    }
-
-    /**
-     * Test function to validate password length.
-     *
-     * @covers ::exceeds_password_length
-     * @return void
-     */
-    public function test_exceeds_password_length(): void {
-        $this->resetAfterTest(true);
-
-        // With password less than equals to MAX_PASSWORD_CHARACTERS.
-        $this->assertFalse(exceeds_password_length('test'));
-
-        // With password more than MAX_PASSWORD_CHARACTERS.
-        $password = 'thisisapasswordthatcontainscharactersthatcan';
-        $password .= 'exeedthepasswordlengthof128thisispasswordthatcont';
-        $password .= 'ainscharactersthatcanexeedthelength-----';
-        $this->assertTrue(exceeds_password_length($password));
-    }
-
-    /**
-     * Test function validate_internal_user_password.
-     * @covers ::validate_internal_user_password
-     */
-    public function test_validate_internal_user_password(): void {
-        $this->resetAfterTest(true);
-        // Test bcrypt hashes (these will be updated but will still count as valid).
-        $bcrypthashes = [
-            'pw' => '$2y$10$LOSDi5eaQJhutSRun.OVJ.ZSxQZabCMay7TO1KmzMkDMPvU40zGXK',
-            'abc' => '$2y$10$VWTOhVdsBbWwtdWNDRHSpewjd3aXBQlBQf5rBY/hVhw8hciarFhXa',
-            'C0mP1eX_&}<?@*&%` |\"' => '$2y$10$3PJf.q.9ywNJlsInPbqc8.IFeSsvXrGvQLKRFBIhVu1h1I3vpIry6',
-            'ĩńťėŕňăţĩōŋāĹ' => '$2y$10$3A2Y8WpfRAnP3czJiSv6N.6Xp0T8hW3QZz2hUCYhzyWr1kGP1yUve',
-        ];
-
-        // Test sha512 hashes.
-        $sha512hashes = [
-            'pw2' => '$6$rounds=10000$0rDIzh/4.MMf9Dm8$Zrj6Ulc1JFj0RFXwMJFsngRSNGlqkPlV1wwRVv7wBLrMeQeMZrwsBO62zy63D//6R5sNGVYQwPB0K8jPCScxB/',
-            'abc2' => '$6$rounds=10000$t0L6PklgpijV4tMB$1vpCRKCImsVqTPMiZTi6zLGbs.hpAU8I2BhD/IFliBnHJkFZCWEBfTCq6pEzo0Q8nXsryrgeZ.qngcW.eifuW.',
-            'C0mP1eX_&}<?@*&%` |\"2' => '$6$rounds=10000$3TAyVAXN0zmFZ4il$KF8YzduX6Gu0C2xHsY83zoqQ/rLVsb9mLe417wDObo9tO00qeUC68/y2tMq4FL2ixnMPH3OMwzGYo8VJrm8Eq1',
-            'ĩńťėŕňăţĩōŋāĹ2' => '$6$rounds=10000$SHR/6ctTkfXOy5NP$YPv42hjDjohVWD3B0boyEYTnLcBXBKO933ijHmkPXNL7BpqAcbYMLfTl9rjsPmCt.1GZvEJZ8ikkCPYBC5Sdp.',
-        ];
-
-        $validhashes = array_merge($bcrypthashes, $sha512hashes);
-
-        foreach ($validhashes as $password => $hash) {
-            $user = $this->getDataGenerator()->create_user(array('auth' => 'manual', 'password' => $password));
-            $user->password = $hash;
-            // The correct password should be validated.
-            $this->assertTrue(validate_internal_user_password($user, $password));
-            // An incorrect password should not be validated.
-            $this->assertFalse(validate_internal_user_password($user, 'badpw'));
-        }
-    }
-
-    /**
-     * Test function validate_internal_user_password() with a peppered password,
-     * when the pepper no longer exists.
-     *
-     * @covers ::validate_internal_user_password
-     */
-    public function test_validate_internal_user_password_bad_pepper(): void {
-        global $CFG;
-        $this->resetAfterTest();
-
-        // Set a pepper.
-        $CFG->passwordpeppers = [
-                1 => '#GV]NLie|x$H9[$rW%94bXZvJHa%z',
-                2 => '#GV]NLie|x$H9[$rW%94bXZvJHa%$'
-        ];
-        $password = 'test';
-
-        $user = $this->getDataGenerator()->create_user(['auth' => 'manual', 'password' => $password]);
-        $this->assertTrue(validate_internal_user_password($user, $password));
-        $this->assertFalse(validate_internal_user_password($user, 'badpw'));
-
-        // Now remove the peppers.
-        // Things should not work.
-        unset($CFG->passwordpeppers);
-        $this->assertFalse(validate_internal_user_password($user, $password));
-    }
-
-    /**
-     * Helper method to test hashing passwords.
-     *
-     * @param array $passwords
-     * @return void
-     * @covers ::hash_internal_user_password
-     */
-    public function validate_hashed_passwords(array $passwords): void {
-        foreach ($passwords as $password) {
-            $hash = hash_internal_user_password($password);
-            $fasthash = hash_internal_user_password($password, true);
-            $user = $this->getDataGenerator()->create_user(['auth' => 'manual']);
-            $user->password = $hash;
-            $this->assertTrue(validate_internal_user_password($user, $password));
-
-            // They should not be in bycrypt format.
-            $this->assertFalse(password_is_legacy_hash($hash));
-
-            // Check that cost factor in hash is correctly set.
-            $this->assertMatchesRegularExpression('/\$6\$rounds=10000\$.{103}/', $hash);
-            $this->assertMatchesRegularExpression('/\$6\$rounds=5000\$.{103}/', $fasthash);
-        }
-    }
-
-    /**
-     * Test function update_internal_user_password.
-     * @covers ::update_internal_user_password
-     */
-    public function test_hash_internal_user_password(): void {
-        global $CFG;
-        $this->resetAfterTest();
-        $passwords = ['pw', 'abc123', 'C0mP1eX_&}<?@*&%` |\"', 'ĩńťėŕňăţĩōŋāĹ'];
-
-        // Check that some passwords that we convert to hashes can
-        // be validated.
-        $this->validate_hashed_passwords($passwords);
-
-        // Test again with peppers.
-        $CFG->passwordpeppers = [
-                1 => '#GV]NLie|x$H9[$rW%94bXZvJHa%z',
-                2 => '#GV]NLie|x$H9[$rW%94bXZvJHa%$'
-        ];
-        $this->validate_hashed_passwords($passwords);
-
-        // Add a new pepper and check that things still pass.
-        $CFG->passwordpeppers = [
-                1 => '#GV]NLie|x$H9[$rW%94bXZvJHa%z',
-                2 => '#GV]NLie|x$H9[$rW%94bXZvJHa%$',
-                3 => '#GV]NLie|x$H9[$rW%94bXZvJHQ%$'
-        ];
-        $this->validate_hashed_passwords($passwords);
-    }
-
-    /**
-     * Test function update_internal_user_password().
-     */
-    public function test_update_internal_user_password(): void {
-        global $DB;
-        $this->resetAfterTest();
-        $passwords = array('password', '1234', 'changeme', '****');
-        foreach ($passwords as $password) {
-            $user = $this->getDataGenerator()->create_user(array('auth'=>'manual'));
-            update_internal_user_password($user, $password);
-            // The user object should have been updated.
-            $this->assertTrue(validate_internal_user_password($user, $password));
-            // The database field for the user should also have been updated to the
-            // same value.
-            $this->assertSame($user->password, $DB->get_field('user', 'password', array('id' => $user->id)));
-        }
-
-        $user = $this->getDataGenerator()->create_user(array('auth'=>'manual'));
-        // Manually set the user's password to the bcrypt of the string 'password'.
-        $DB->set_field('user', 'password', '$2y$10$HhNAYmQcU1GqU/psOmZjfOWlhPEcxx9aEgSJqBfEtYVyq1jPKqMAi', ['id' => $user->id]);
-
-        $sink = $this->redirectEvents();
-        // Update the password.
-        update_internal_user_password($user, 'password');
-        $events = $sink->get_events();
-        $sink->close();
-        $event = array_pop($events);
-
-        // Password should have been updated to a SHA512 hash.
-        $this->assertFalse(password_is_legacy_hash($user->password));
-
-        // Verify event information.
-        $this->assertInstanceOf('\core\event\user_password_updated', $event);
-        $this->assertSame($user->id, $event->relateduserid);
-        $this->assertEquals(\context_user::instance($user->id), $event->get_context());
-        $this->assertEventContextNotUsed($event);
-
-        // Verify recovery of property 'auth'.
-        unset($user->auth);
-        update_internal_user_password($user, 'newpassword');
-        $this->assertDebuggingCalled('User record in update_internal_user_password() must include field auth',
-                DEBUG_DEVELOPER);
-        $this->assertEquals('manual', $user->auth);
-    }
-
-    /**
-     * Testing that if the password is not cached, that it does not update
-     * the user table and fire event.
-     *
-     * @dataProvider update_internal_user_password_no_cache_provider
-     * @covers ::update_internal_user_password
-     *
-     * @param string $authmethod The authentication method to set for the user.
-     * @param string|null $password The new password to set for the user.
-     */
-    public function test_update_internal_user_password_no_cache(
-        string $authmethod,
-        ?string $password,
-    ): void {
-        global $DB;
-        $this->resetAfterTest();
-
-        $user = $this->getDataGenerator()->create_user(['auth' => $authmethod]);
-        $DB->update_record('user', ['id' => $user->id, 'password' => AUTH_PASSWORD_NOT_CACHED]);
-        $user->password = AUTH_PASSWORD_NOT_CACHED;
-
-        $sink = $this->redirectEvents();
-        update_internal_user_password($user, $password);
-        $this->assertEquals(0, $sink->count(), 'User updated event should not fire');
-    }
-
-    /**
-     * The data provider will test the {@see test_update_internal_user_password_no_cache}
-     * for accounts using the authentication method with prevent_local_passwords set to true (no cache).
-     *
-     * @return array
-     */
-    public static function update_internal_user_password_no_cache_provider(): array {
-        return [
-            'Password is not empty' => ['db', 'wonkawonka'],
-            'Password is an empty string' => ['oauth2', ''],
-            'Password is null' => ['oauth2', null],
-        ];
-    }
-
-    /**
-     * Test if the user has a password hash, but now their auth method
-     * says not to cache it.  Then it should update.
-     */
-    public function test_update_internal_user_password_update_no_cache(): void {
-        $this->resetAfterTest();
-
-        $user = $this->getDataGenerator()->create_user(array('password' => 'test'));
-        $this->assertNotEquals(AUTH_PASSWORD_NOT_CACHED, $user->password);
-        $user->auth = 'db'; // Change to a auth that does not store passwords.
-
-        $sink = $this->redirectEvents();
-        update_internal_user_password($user, 'wonkawonka');
-        $this->assertGreaterThanOrEqual(1, $sink->count(), 'User updated event should fire');
-
-        $this->assertEquals(AUTH_PASSWORD_NOT_CACHED, $user->password);
     }
 
     public function test_fullname(): void {
@@ -6144,5 +5857,73 @@ EOT;
         // FEATURE_GROUPMEMBERSONLY.
         // Note: Use the string version.
         yield 'FEATURE_GROUPMEMBERSONLY' => ['groupmembersonly'];
+    }
+
+    /**
+     * Data provider for test_should_vary_by_accept_language
+     *
+     * @return array
+     */
+    public static function should_vary_by_accept_language_provider(): array {
+        return [
+            'Single language installed' => [
+                'translations' => ['en' => 'English (en)'],
+                'script' => 'index.php',
+                'expected' => false,
+            ],
+            'Two languages installed' => [
+                'translations' => ['en' => 'English (en)', 'fr' => 'French (fr)'],
+                'script' => 'index.php',
+                'expected' => true,
+            ],
+            'Three languages installed' => [
+                'translations' => ['en' => 'English (en)', 'fr' => 'French (fr)', 'de' => 'German (de)'],
+                'script' => 'index.php',
+                'expected' => true,
+            ],
+            'Multi-lang but pluginfile.php' => [
+                'translations' => ['en' => 'English (en)', 'fr' => 'French (fr)'],
+                'script' => 'pluginfile.php',
+                'expected' => false,
+            ],
+            'Multi-lang but draftfile.php' => [
+                'translations' => ['en' => 'English (en)', 'fr' => 'French (fr)'],
+                'script' => 'draftfile.php',
+                'expected' => false,
+            ],
+            'Multi-lang but tokenpluginfile.php' => [
+                'translations' => ['en' => 'English (en)', 'fr' => 'French (fr)'],
+                'script' => 'tokenpluginfile.php',
+                'expected' => false,
+            ],
+            'Multi-lang but file.php' => [
+                'translations' => ['en' => 'English (en)', 'fr' => 'French (fr)'],
+                'script' => 'file.php',
+                'expected' => false,
+            ],
+        ];
+    }
+
+    /**
+     * Tests that should_vary_by_accept_language returns true only when more than one language pack is installed
+     * and the request is not for a binary file-serving endpoint.
+     *
+     * @covers ::should_vary_by_accept_language
+     * @dataProvider should_vary_by_accept_language_provider
+     * @param string[] $translations the installed translations to simulate
+     * @param string $script the script filename to simulate
+     * @param bool $expected whether Vary: Accept-Language should be sent
+     */
+    public function test_should_vary_by_accept_language(array $translations, string $script, bool $expected): void {
+        $this->resetAfterTest();
+        testable_string_manager_for_current_language_tests::set_fake_list_of_installed_languages($translations);
+
+        $originalscript = $_SERVER['SCRIPT_NAME'] ?? null;
+        $_SERVER['SCRIPT_NAME'] = '/moodle/' . $script;
+
+        $this->assertEquals($expected, should_vary_by_accept_language());
+
+        $_SERVER['SCRIPT_NAME'] = $originalscript;
+        testable_string_manager_for_current_language_tests::reset_installed_languages_override();
     }
 }

@@ -37,9 +37,9 @@ $messageproviders = array (
 
     'newlogin' => array (
         'defaults' => [
-            'popup' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
-            'email' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
-            'airnotifier' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+            'popup' => MESSAGE_FORCED + MESSAGE_DEFAULT_ENABLED,
+            'email' => MESSAGE_FORCED + MESSAGE_DEFAULT_ENABLED,
+            'airnotifier' => MESSAGE_FORCED + MESSAGE_DEFAULT_ENABLED,
         ],
     ),
 
@@ -69,6 +69,15 @@ $messageproviders = array (
         ],
         'capability' => 'moodle/site:config',
     ),
+
+    // Notification that a registered site has stopped sending registration updates.
+    'registrationreportingpaused' => [
+        'defaults' => [
+            'popup' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+            'email' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+        ],
+        'capability' => 'moodle/site:config',
+    ],
 
     'instantmessage' => array (
         'defaults' => array(

@@ -445,6 +445,9 @@ function upgrade_plugin_savepoint($result, $version, $type, $plugin, $allowabort
 /**
  * Detect if there are leftovers in PHP source files.
  *
+ * Paths are relative to $CFG->dirroot (from 5.1 onwards, that means
+ * inside the "public/" directory)
+ *
  * During main version upgrades administrators MUST move away
  * old PHP source files and start from scratch (or better
  * use git).
@@ -455,6 +458,11 @@ function upgrade_stale_php_files_present(): bool {
     global $CFG;
 
     $someexamplesofremovedfiles = [
+        // Removed in 5.3.
+        '/course/tests/behat/activity_navigation_with_restrictions.feature',
+        '/lib/amd/src/deprecated.js',
+        '/lib/amd/src/url.js',
+        '/lib/js/esm/build/react_autoinit.js.map',
         // Removed in 5.2.
         '/availability/renderer.php',
         '/course/tests/behat/course_controls.feature',
@@ -2540,7 +2548,11 @@ function check_upgrade_key($upgradekeyhash) {
 
                 /** @var core_admin_renderer $output */
                 $output = $PAGE->get_renderer('core', 'admin');
-                echo $output->upgradekey_form_page(new moodle_url('/admin/index.php', array('cache' => 0)));
+
+                echo $output->upgradekey_form_page_with_validation(
+                    new moodle_url('/admin/index.php', ['cache' => 0]),
+                    $upgradekeyhash !== null,
+                );
                 die();
             } else {
                 // This should not happen.

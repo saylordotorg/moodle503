@@ -48,7 +48,6 @@ class manager {
             'adminpresets_admin_setting_configduration_with_advanced' => 'adminpresets_admin_setting_configtext_with_advanced',
             'adminpresets_admin_setting_configduration' => 'adminpresets_admin_setting_configtext',
             'adminpresets_admin_setting_configempty' => 'adminpresets_admin_setting_configtext',
-            'adminpresets_admin_setting_configexecutable' => 'adminpresets_admin_setting_configtext',
             'adminpresets_admin_setting_configfile' => 'adminpresets_admin_setting_configtext',
             'adminpresets_admin_setting_confightmleditor' => 'adminpresets_admin_setting_configtext',
             'adminpresets_admin_setting_configmixedhostiplist' => 'adminpresets_admin_setting_configtext',
@@ -307,46 +306,98 @@ class manager {
      * @return mixed
      */
     public function get_setting($settingdata, $currentvalue) {
-
-        $classname = null;
+        $possibleclasses = [];
 
         // Getting the appropriate class to get the correct setting value.
-        $settingtype = get_class($settingdata);
-        // Check if it is a setting from a plugin.
-        $namespacedata = explode('\\', $settingtype);
-        if (count($namespacedata) > 1) {
-            $plugindata = explode('_', $namespacedata[0]);
-            $settingtype = end($namespacedata);
-        } else {
-            $plugindata = explode('_', $settingtype, 2);
+        $settingclass = get_class($settingdata);
+
+        $possibleclasses = $this->get_setting_classnames($settingclass);
+
+        foreach ($possibleclasses as $potentialclassname) {
+            if (class_exists($potentialclassname)) {
+                return new $potentialclassname($settingdata, $currentvalue);
+            }
         }
 
-        $types = \core_component::get_plugin_types();
-        if (array_key_exists($plugindata[0], $types)) {
-            $plugins = \core_component::get_plugin_list($plugindata[0]);
-            if (array_key_exists($plugindata[1], $plugins)) {
-                // Check if there is a specific class for this plugin admin setting.
-                $settingname = 'adminpresets_' . $settingtype;
-                $classname = "\\$plugindata[0]_$plugindata[1]\\adminpresets\\$settingname";
-                if (!class_exists($classname)) {
-                    $classname = null;
+        // Return the default setting class if there is no specific class for this setting.
+        return new \core_adminpresets\local\setting\adminpresets_setting(
+            $settingdata,
+            $currentvalue,
+        );
+    }
+
+    /**
+     * Get the possible setting names for this class name.
+     *
+     * @param string $classname
+     * @return string[]
+     */
+    private function get_setting_classnames(string $classname): array {
+        $possibleclasses = [];
+        // Getting the appropriate class to get the correct setting value.
+
+        $namespacedata = explode('\\', $classname);
+        $plugindata = [];
+        if (count($namespacedata) === 4 && $namespacedata[1] === 'setting') {
+            // This is in the 'setting' L2 namespace.
+            // The correct format of these settings is:
+            // <component>\setting\setting\<type>.
+            $settingtype = $namespacedata[3];
+            $component = $namespacedata[0];
+            [, $pluginname] = \core\component::normalize_component($component);
+
+            // For years we have not had any standardisation for admin setting names.
+            $mappedclasssources = [
+                "adminpresets_admin_setting_{$settingtype}",
+
+                // For the moment we map all the settings in the 'setting' L2 namespace to the legacy class name.
+                // That is in the format of either:
+                // - adminpresets_<component>_setting_<settingtype>; or
+                // - adminpresets_<pluginname>_setting_<settingtype>.
+                "adminpresets_{$component}_setting_{$settingtype}",
+                "adminpresets_{$pluginname}_setting_{$settingtype}",
+
+                // And then we have this format where we pluralise setting to settings in a handful of cases.
+                // Because standards are for wimps.
+                "adminpresets_{$component}_settings_{$settingtype}",
+                "adminpresets_{$pluginname}_settings_{$settingtype}",
+            ];
+            foreach ($mappedclasssources as $settingtype) {
+                $possibleclasses[] = "\\core_adminpresets\\local\\setting\\{$settingtype}";
+                $mappedclass = self::get_settings_class($settingtype);
+                if ($mappedclass) {
+                    $possibleclasses[] = $mappedclass;
                 }
             }
         } else {
-            $settingname = 'adminpresets_' . $settingtype;
-            $classname = '\\core_adminpresets\\local\\setting\\' . $settingname;
-            if (!class_exists($classname)) {
-                // Check if there is some mapped class that should be used for this setting.
-                $classname = self::get_settings_class($settingname);
+            // This code handles the legacy class formats.
+            $settingtype = $classname;
+            if (count($namespacedata) > 1) {
+                $plugindata = explode('_', $namespacedata[0]);
+                $settingtype = end($namespacedata);
+            } else {
+                $plugindata = explode('_', $settingtype, 2);
+            }
+
+            $types = \core_component::get_plugin_types();
+            if (count($plugindata) == 2 && array_key_exists($plugindata[0], $types)) {
+                $plugins = \core_component::get_plugin_list($plugindata[0]);
+                if (array_key_exists($plugindata[1], $plugins)) {
+                    // Check if there is a specific class for this plugin admin setting.
+                    $settingname = 'adminpresets_' . $settingtype;
+                    $possibleclasses[] = "\\{$plugindata[0]}_{$plugindata[1]}\\adminpresets\\{$settingname}";
+                }
+            } else {
+                $settingname = 'adminpresets_' . $settingtype;
+                $possibleclasses[] = '\\core_adminpresets\\local\\setting\\' . $settingname;
+                $mappedclass = self::get_settings_class($settingname);
+                if ($mappedclass) {
+                    $possibleclasses[] = $mappedclass;
+                }
             }
         }
 
-        if (is_null($classname)) {
-            // Return the default setting class if there is no specific class for this setting.
-            $classname = '\\core_adminpresets\\local\\setting\\adminpresets_setting';
-        }
-
-        return new $classname($settingdata, $currentvalue);
+        return $possibleclasses;
     }
 
     /**
@@ -620,7 +671,7 @@ class manager {
      *               to define if any setting has been found and another boolean to specify if any plugin has been found.
      */
     public function import_preset(string $xmlcontent, ?string $presetname = null): array {
-        global $DB, $USER;
+        global $DB, $USER, $CFG;
 
         $settingsfound = false;
         $pluginsfound = false;
@@ -681,6 +732,13 @@ class manager {
                     // Cleaning the setting value.
                     if (!$presetsetting = $this->get_setting($sitesettings[$plugin][$name]->get_settingdata(), $value)) {
                         debugging('Setting ' . $plugin . '/' . $name . ' not implemented', DEBUG_DEVELOPER);
+                        continue;
+                    }
+
+                    // When $CFG->preventexecpath is set, executable paths are managed through
+                    // config.php and cannot be changed via presets.
+                    $settingdata = $sitesettings[$plugin][$name]->get_settingdata();
+                    if ($settingdata instanceof \admin_setting_configfile && !empty($CFG->preventexecpath)) {
                         continue;
                     }
 
@@ -987,7 +1045,7 @@ class manager {
      * @return array List with an array with the applied settings, another with the skipped ones and the adminpresetapplyid.
      */
     protected function apply_settings(int $presetid, bool $simulate = false, ?int $adminpresetapplyid = null): array {
-        global $DB, $USER;
+        global $CFG, $DB, $USER;
 
         $applied = [];
         $skipped = [];
@@ -1046,6 +1104,25 @@ class manager {
 
                 // Saving data.
                 if ($updatesetting) {
+                    // Do not overwrite executable/directory paths when $CFG->preventexecpath is enabled.
+                    $settingdata = $presetsetting->get_settingdata();
+                    if ($settingdata instanceof \admin_setting_configfile && !empty($CFG->preventexecpath)) {
+                        $skipped[] = $data;
+                        continue;
+                    }
+
+                    // Ensure executable-path settings point to a valid executable file before saving.
+                    if ($settingdata instanceof \admin_setting_configexecutable) {
+                        $execpath = $presetsetting->get_value();
+                        if (!empty($execpath)) {
+                            require_once($CFG->libdir . '/filelib.php');
+                            if (!file_exists($execpath) || is_dir($execpath) || !file_is_executable($execpath)) {
+                                $skipped[] = $data;
+                                continue;
+                            }
+                        }
+                    }
+
                     // The preset application it's only saved when differences (in their values) are found.
                     if (empty($applieditem)) {
                         // Save the preset application and store the preset applied id.

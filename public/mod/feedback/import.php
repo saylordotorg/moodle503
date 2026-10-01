@@ -39,6 +39,7 @@ if ($action !== false) {
     $url->param('action', $action);
 }
 $PAGE->set_url($url);
+$PAGE->set_show_navigation_footer(false);
 navigation_node::override_active_url(new moodle_url('/mod/feedback/edit.php'));
 
 if (! $cm = get_coursemodule_from_id('feedback', $id)) {
@@ -170,8 +171,9 @@ function feedback_import_loaded_data(&$data, $feedbackid) {
     $itembackup = [];
     foreach ($data as $item) {
         $position++;
+
         //check the typ
-        $typ = $item['@']['TYPE'];
+        $typ = clean_param($item['@']['TYPE'], PARAM_ALPHA);
 
         //check oldtypes first
         switch($typ) {

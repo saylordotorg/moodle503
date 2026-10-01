@@ -178,10 +178,10 @@ if ($userform->is_cancelled()) {
 
     if (empty($usernew->auth)) {
         // User editing self.
-        $authplugin = get_auth_plugin($user->auth);
+        $authplugin = \core\di::get(\core\authentication::class)->get_plugin($user->auth);
         unset($usernew->auth); // Can not change/remove.
     } else {
-        $authplugin = get_auth_plugin($usernew->auth);
+        $authplugin = \core\di::get(\core\authentication::class)->get_plugin($usernew->auth);
     }
 
     $usernew->timemodified = time();
@@ -199,12 +199,12 @@ if ($userform->is_cancelled()) {
             if ($createpassword or empty($usernew->newpassword)) {
                 $usernew->password = '';
             } else {
-                $usernew->password = hash_internal_user_password($usernew->newpassword);
+                $usernew->password = \core\di::get(\core\authentication\password::class)->hash($usernew->newpassword);
             }
         } else {
             $usernew->password = AUTH_PASSWORD_NOT_CACHED;
         }
-        $usernew->id = user_create_user($usernew, false, false);
+        $usernew->id = \core\user::create_user($usernew, false, false);
 
         if (!$authplugin->is_internal() and $authplugin->can_change_password() and !empty($usernew->newpassword)) {
             if (!$authplugin->user_update_password($usernew, $usernew->newpassword)) {
@@ -220,7 +220,7 @@ if ($userform->is_cancelled()) {
             // Auth update failed.
             throw new \moodle_exception('cannotupdateuseronexauth', '', '', $user->auth);
         }
-        user_update_user($usernew, false, false);
+        \core\user::update_user($usernew, false, false);
 
         // Set new password if specified.
         if (!empty($usernew->newpassword)) {

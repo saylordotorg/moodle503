@@ -31,11 +31,6 @@
     height: auto;
 }
 
-/* The javascript is adding a style="height: 0px;" to this element - we need to set the min-height so the height is ignored. */
-.filepicker .moodle-dialogue-bd {
-    min-height: 520px;
-}
-
 .fp-navbar {
     border-color: $input-border-color;
     border-bottom: 0;
@@ -49,6 +44,10 @@
     clear: none;
     overflow: auto;
     height: 452px;
+    // Keep the dialogue inside short viewports. The 240px budget covers everything in the dialogue that is
+    // not this content area (header, navbar and body padding), plus a margin from the top and bottom edges.
+    min-height: 150px;
+    max-height: calc(100vh - 240px);
 }
 
 .filepicker.moodle-dialogue-fullscreen .file-picker .fp-content {
@@ -703,6 +702,11 @@ a.ygtvspacer:hover {
         border-bottom: 1px solid $filemanager-yui-table-header-border-bottom-color !important;
         border-left: 0 solid $filemanager-yui-table-header-border-left-color !important;
         color: $filemanager-yui-table-header-color !important;
+
+        // The header sits on a raised surface, which is dark once the page is, so its label cannot stay a dark grey.
+        @include dark-mode {
+            color: var(--#{$prefix}gray-700) !important;
+        }
     }
 
     .yui3-datatable-odd .yui3-datatable-cell {
@@ -844,7 +848,7 @@ a.ygtvspacer:hover {
     height: 80px;
     position: absolute;
     top: 5px;
-    color: $gray-500;
+    color: var(--#{$prefix}gray-500);
 }
 
 .fitem.disabled .filepicker-container,
@@ -852,20 +856,24 @@ a.ygtvspacer:hover {
     display: none;
 }
 
-.dndupload-progressbars {
+.dndupload-progressbars,
+.fpupload-progressbars {
     padding: 10px;
     display: none;
 }
 
-.dndupload-inprogress .dndupload-progressbars {
+.dndupload-inprogress .dndupload-progressbars,
+.fpupload-inprogress .fpupload-progressbars {
     display: block;
 }
 
-.dndupload-inprogress .fp-content {
+.dndupload-inprogress .fp-content,
+.fpupload-inprogress .fp-content {
     display: none;
 }
 
-.filemanager.fm-noitems .dndupload-inprogress .fm-empty-container {
+.filemanager.fm-noitems .dndupload-inprogress .fm-empty-container,
+.filemanager.fm-noitems.fpupload-inprogress .fm-empty-container {
     display: none;
 }
 

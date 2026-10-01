@@ -27,6 +27,7 @@ namespace mod_quiz;
 use context_module;
 use core_external\external_api;
 use mod_quiz\quiz_settings;
+use PHPUnit\Framework\Attributes\CoversFunction;
 
 defined('MOODLE_INTERNAL') || die();
 
@@ -38,8 +39,73 @@ require_once($CFG->dirroot . '/mod/quiz/tests/quiz_question_helper_test_trait.ph
  * @copyright  2008 The Open University
  * @license    http://www.gnu.org/copyleft/gpl.html GNU Public License
  */
+#[CoversFunction('quiz_add_instance')]
+#[CoversFunction('quiz_update_instance')]
 final class lib_test extends \advanced_testcase {
     use \quiz_question_helper_test_trait;
+
+    /**
+     * Test that creating a quiz without a due date uses the database default without triggering warnings.
+     */
+    public function test_quiz_add_instance_without_duedate(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $course = $this->getDataGenerator()->create_course();
+
+        $quiz = (object) [
+            'course' => $course->id,
+            'name' => 'Quiz without a due date',
+            'intro' => '',
+            'introformat' => FORMAT_HTML,
+            'timeopen' => 0,
+            'timeclose' => 0,
+            'quizpassword' => '',
+            'grade' => 100,
+            'decimalpoints' => 2,
+            'questiondecimalpoints' => -1,
+        ];
+        $quiz->coursemodule = add_course_module((object) [
+            'course' => $course->id,
+            'module' => $DB->get_field('modules', 'id', ['name' => 'quiz'], MUST_EXIST),
+        ]);
+
+        $quizid = quiz_add_instance($quiz);
+
+        $this->assertEquals(0, $DB->get_field('quiz', 'duedate', ['id' => $quizid], MUST_EXIST));
+        $this->assertFalse($DB->record_exists('event', [
+            'modulename' => 'quiz',
+            'instance' => $quizid,
+            'eventtype' => QUIZ_EVENT_TYPE_DUE,
+        ]));
+    }
+
+    /**
+     * Test that updating a quiz without a due date preserves the stored date and its calendar event.
+     */
+    public function test_quiz_update_instance_without_duedate(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $course = $this->getDataGenerator()->create_course();
+        $duedate = time() + DAYSECS;
+        $quiz = $this->getDataGenerator()->create_module('quiz', ['course' => $course->id, 'duedate' => $duedate]);
+        $quiz->instance = $quiz->id;
+        $quiz->coursemodule = $quiz->cmid;
+        $quiz->quizpassword = $quiz->password;
+        unset($quiz->duedate);
+
+        $this->assertTrue(quiz_update_instance($quiz, null));
+
+        $this->assertEquals($duedate, $DB->get_field('quiz', 'duedate', ['id' => $quiz->id], MUST_EXIST));
+        $this->assertEquals($duedate, $DB->get_field('event', 'timestart', [
+            'modulename' => 'quiz',
+            'instance' => $quiz->id,
+            'eventtype' => QUIZ_EVENT_TYPE_DUE,
+        ], MUST_EXIST));
+    }
 
     public function test_quiz_has_grades(): void {
         $quiz = new \stdClass();
@@ -422,6 +488,7 @@ final class lib_test extends \advanced_testcase {
             'quiz' => $quiz->id,
             'groupid' => $group1->id,
             'timeopen' => $now,
+            'duedate' => $now + 10,
             'timeclose' => $now + 20
         ];
         $DB->insert_record('quiz_overrides', $override1);
@@ -430,6 +497,7 @@ final class lib_test extends \advanced_testcase {
             'quiz' => $quiz->id,
             'groupid' => $group2->id,
             'timeopen' => $now - 10,
+            'duedate' => $now,
             'timeclose' => $now + 10
         ];
         $DB->insert_record('quiz_overrides', $override2);
@@ -446,6 +514,46 @@ final class lib_test extends \advanced_testcase {
         // Override 1's time close has higher priority since it is later than override 2's.
         $this->assertEquals(1, $closepriorities[$override1->timeclose]);
         $this->assertEquals(2, $closepriorities[$override2->timeclose]);
+
+        $duedatepriorities = $priorities['duedate'];
+        // Override 1's due date has higher priority since it is later than override 2's.
+        $this->assertEquals(1, $duedatepriorities[$override1->duedate]);
+        $this->assertEquals(2, $duedatepriorities[$override2->duedate]);
+    }
+
+    /**
+     * Test event actions for due event.
+     * @covers ::mod_quiz_core_calendar_provide_event_action
+     */
+    public function test_quiz_core_calendar_provide_event_action_due(): void {
+        $this->resetAfterTest();
+
+        $this->setAdminUser();
+
+        // Create a course.
+        $course = $this->getDataGenerator()->create_course();
+        // Create a student and enrol into the course.
+        $student = $this->getDataGenerator()->create_and_enrol($course);
+        // Create a quiz.
+        $quiz = $this->getDataGenerator()->create_module('quiz', ['course' => $course->id,
+            'timeopen' => time() - DAYSECS, 'duedate' => time() + HOURSECS, 'timeclose' => time() + DAYSECS]);
+
+        // Create a calendar event.
+        $event = $this->create_action_event($course->id, $quiz->id, QUIZ_EVENT_TYPE_DUE);
+        // Now, log in as student.
+        $this->setUser($student);
+        // Create an action factory.
+        $factory = new \core_calendar\action_factory();
+
+        // Decorate action event.
+        $actionevent = mod_quiz_core_calendar_provide_event_action($event, $factory);
+
+        // Confirm the event was decorated.
+        $this->assertInstanceOf('\core_calendar\local\event\value_objects\action', $actionevent);
+        $this->assertEquals(get_string('attemptquiznow', 'quiz'), $actionevent->get_name());
+        $this->assertInstanceOf('moodle_url', $actionevent->get_url());
+        $this->assertEquals(1, $actionevent->get_item_count());
+        $this->assertTrue($actionevent->is_actionable());
     }
 
     public function test_quiz_core_calendar_provide_event_action_open(): void {

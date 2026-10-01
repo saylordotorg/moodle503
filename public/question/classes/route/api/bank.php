@@ -27,21 +27,19 @@ use core\router\schema\example;
 use core\router\schema\objects\array_of_strings;
 use core\router\schema\objects\array_of_things;
 use core\router\schema\objects\schema_object;
-use core\router\schema\parameters\path_parameter;
 use core\router\schema\parameters\query_parameter;
 use core\router\schema\response\content\json_media_type;
 use core\router\schema\response\payload_response;
 use core\router\schema\response\response;
+use core\router\scope\scopeset;
 use core_question\local\bank\formatted_bank;
 use core_question\local\bank\question_bank_helper;
 use core_question\local\bank\question_counts;
 use core_question\local\bank\question_edit_contexts;
-use core_question\local\bank\question_version_status;
 use core_question\output\question_category_selector;
 use core_question\question_category;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
-use stdClass;
 
 /**
  * Web service functions related to question banks
@@ -91,6 +89,9 @@ class bank {
             ),
         ],
         requirelogin: new require_login(false, true, 'course'),
+    )]
+    #[scopeset(
+        new \core_course\route\scope\course\content\read(),
     )]
     public function question_counts(
         ServerRequestInterface $request,
@@ -142,6 +143,7 @@ class bank {
             new query_coursemodule('currentmodule'),
             new query_parameter(name: 'includeshared', type: param::BOOL, default: true),
             new query_parameter(name: 'includerecent', type: param::BOOL, default: false),
+            new query_parameter(name: 'includeprivate', type: param::BOOL, default: false),
         ],
         responses: [
             new response(
@@ -160,6 +162,9 @@ class bank {
         ],
         requirelogin: new require_login(true, courseattributename: 'course'),
     )]
+    #[scopeset(
+        new \core_course\route\scope\course\content\read(),
+    )]
     public function banks(
         ServerRequestInterface $request,
         ResponseInterface $response,
@@ -173,6 +178,7 @@ class bank {
             $currentmodulecontext,
             $params['includeshared'],
             $params['includerecent'],
+            $params['includeprivate'],
         );
         return new payload_response(
             request: $request,
@@ -181,6 +187,15 @@ class bank {
         );
     }
 
+    /**
+     * Return a list of question categories with names and info formatted for output.
+     *
+     * @param ServerRequestInterface $request
+     * @param ResponseInterface $response
+     * @param module $coursemodulecontext The module context.
+     * @param question_category_selector $categoryselector Injected dependency.
+     * @return payload_response The course module context id and name, and a list of question categories in that context.
+     */
     #[route(
         path: '/categories', // Resolves to /api/rest/v2/question/categories.
         queryparams: [
@@ -203,15 +218,9 @@ class bank {
             ),
         ],
     )]
-    /**
-     * Return a list of question categories with names and info formatted for output.
-     *
-     * @param ServerRequestInterface $request
-     * @param ResponseInterface $response
-     * @param module $coursemodulecontext The module context.
-     * @param question_category_selector $categoryselector Injected dependency.
-     * @return payload_response The course module context id and name, and a list of question categories in that context.
-     */
+    #[scopeset(
+        new \core_course\route\scope\course\content\read(),
+    )]
     public function categories(
         ServerRequestInterface $request,
         ResponseInterface $response,

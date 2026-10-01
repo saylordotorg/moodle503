@@ -685,7 +685,6 @@ final class user_test extends \advanced_testcase {
         // Test against theme property choices.
         $choices = \core_user::get_property_choices('theme');
         $this->assertArrayHasKey('boost', $choices);
-        $this->assertArrayHasKey('classic', $choices);
         $this->assertArrayNotHasKey('unknowntheme', $choices);
         $this->assertArrayNotHasKey('wrongtheme', $choices);
 
@@ -1034,5 +1033,39 @@ final class user_test extends \advanced_testcase {
                 'expected' => 'l',
             ],
         ];
+    }
+
+    /**
+     * Test get_system_user().
+     *
+     * The system user is used to represent a login with no associated Moodle user, for example an
+     * OAuth2 client_credentials grant. It is based on the primary admin user, but with the
+     * timezone, language, theme, and description reset to site defaults so it does not leak any
+     * personal preferences of whoever happens to be the primary admin.
+     */
+    public function test_get_system_user(): void {
+        global $CFG, $DB;
+
+        $CFG->timezone = 'Australia/Perth';
+
+        $admin = get_admin();
+        $admin->timezone = 'Pacific/Auckland';
+        $admin->lang = 'en_ar';
+        $admin->theme = 'classic';
+        $admin->description = 'A description that should not appear on the system user.';
+        $DB->update_record('user', $admin);
+
+        // Note: get_admin() caches its result keyed by the value of $CFG->siteadmins. Change that value
+        // (without changing which user it resolves to) so the next call re-fetches the record we
+        // just updated above, instead of returning the value cached by the get_admin() call above.
+        set_config('siteadmins', $CFG->siteadmins . ',-1');
+
+        $systemuser = \core_user::get_system_user();
+
+        $this->assertEquals($admin->id, $systemuser->id);
+        $this->assertSame($CFG->timezone, $systemuser->timezone);
+        $this->assertSame('', $systemuser->lang);
+        $this->assertSame('', $systemuser->theme);
+        $this->assertObjectNotHasProperty('description', $systemuser);
     }
 }

@@ -81,7 +81,7 @@ if (is_mnet_remote_user($user)) {
 }
 
 // Load the appropriate auth plugin.
-$userauth = get_auth_plugin($user->auth);
+$userauth = \core\di::get(\core\authentication::class)->get_plugin($user->auth);
 
 if (!$userauth->can_edit_profile()) {
     throw new \moodle_exception('noprofileedit', 'auth');
@@ -214,7 +214,7 @@ if ($userform->is_cancelled()) {
         }
     }
 
-    $authplugin = get_auth_plugin($user->auth);
+    $authplugin = \core\di::get(\core\authentication::class)->get_plugin($user->auth);
 
     $usernew->timemodified = time();
 
@@ -230,7 +230,7 @@ if ($userform->is_cancelled()) {
     }
 
     // Update user with new profile data.
-    user_update_user($usernew, false, false);
+    \core\user::update_user($usernew, false, false);
 
     // Update preferences.
     useredit_update_user_preference($usernew);
