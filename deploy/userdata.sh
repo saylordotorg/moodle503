@@ -195,7 +195,7 @@ server {
     location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
         expires 30d;
         add_header Cache-Control "public, immutable";
-        try_files $uri =404;
+        try_files $uri /r.php$uri?$query_string;
     }
 }
 NGINX
