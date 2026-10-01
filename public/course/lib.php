@@ -898,7 +898,38 @@ function course_module_bulk_update_calendar_events($modulename, $courseid = 0) {
 
     foreach ($instances as $instance) {
         if ($cm = get_coursemodule_from_instance($modulename, $instance->id, $instance->course)) {
-            course_module_calendar_event_update_process($instance, $cm);
+            // Optional check for modules mid-delete.
+            if (!empty($cm->deletioninprogress)) {
+                continue;
+            }
+            try {
+                // Validate the cm is present in course modinfo, not just in mdl_course_modules.
+                get_fast_modinfo($instance->course)->get_cm($cm->id);
+
+                course_module_calendar_event_update_process($instance, $cm);
+            } catch (Exception $e) {
+                $errorcode = $e->errorcode ?? '';
+                if ($errorcode === 'invalidrecord') {
+                    debugging(
+                        get_string('calendareventskipformissingcourse', 'error', $instance->course),
+                        DEBUG_DEVELOPER
+                    );
+                    continue;
+                }
+                if ($errorcode === 'invalidcoursemoduleid' || $errorcode === 'invalidmoduleid') {
+                    $a = new stdClass();
+                    $a->modulename = $modulename;
+                    $a->instance = $instance->id;
+                    $a->course = $instance->course;
+                    $a->cm = $cm->id;
+                    debugging(
+                        get_string('calendareventskipforbrokencoursemodule', 'error', $a),
+                        DEBUG_DEVELOPER
+                    );
+                    continue;
+                }
+                throw $e;
+            }
         }
     }
     return true;
@@ -977,8 +1008,9 @@ function move_section_to($course, $section, $destination, $ignorenumsections = f
  * @return bool whether section was deleted
  */
 function course_delete_section($course, $sectionornum, $forcedeleteifnotempty = true, $async = false) {
-    $sectionnum = (is_object($sectionornum)) ? $sectionornum->section : (int)$sectionornum;
-    $sectioninfo = get_fast_modinfo($course)->get_section_info($sectionnum);
+    $sectioninfo = (is_object($sectionornum)) ?
+        get_fast_modinfo($course)->get_section_info_by_id($sectionornum->id)
+        : get_fast_modinfo($course)->get_section_info((int)$sectionornum);
     if (!$sectioninfo) {
         return false;
     }
@@ -1036,10 +1068,11 @@ function course_update_section($courseorid, $section, $data): void {
  * @return bool
  */
 function course_can_delete_section($course, $section) {
-    if (is_object($section)) {
-        $section = $section->section;
+    $modinfo = get_fast_modinfo($course);
+    if (!is_object($section)) {
+        $section = $modinfo->get_section_info($section, MUST_EXIST);
     }
-    if (!$section) {
+    if (!$section->section) {
         // Not possible to delete 0-section.
         return false;
     }
@@ -1053,9 +1086,8 @@ function course_can_delete_section($course, $section) {
         return false;
     }
     // Make sure user has capability to delete each activity in this section.
-    $modinfo = get_fast_modinfo($course);
-    if (!empty($modinfo->sections[$section])) {
-        foreach ($modinfo->sections[$section] as $cmid) {
+    if (!empty($modinfo->sections[$section->section])) {
+        foreach ($modinfo->sections[$section->section] as $cmid) {
             if (!has_capability('moodle/course:manageactivities', context_module::instance($cmid))) {
                 return false;
             }
@@ -1402,10 +1434,11 @@ function course_get_cm_edit_actions(cm_info $mod, $indent = -1, $sr = null) {
  * Returns the move action.
  *
  * @param cm_info $mod The module to produce a move button for
- * @param int $sr The section to link back to (used for creating the links)
+ * @param int[]|int|null $returnoptions Options for generating the return URL.
+ *      Alternatively the section page to link back to. Deprecated since Moodle 5.3 (MDL-86284).
  * @return string The markup for the move action, or an empty string if not available.
  */
-function course_get_cm_move(cm_info $mod, $sr = null) {
+function course_get_cm_move(cm_info $mod, $returnoptions = []) {
     global $OUTPUT;
 
     static $str;
@@ -1418,12 +1451,16 @@ function course_get_cm_move(cm_info $mod, $sr = null) {
         $str = get_strings(array('move'));
     }
 
-    if (!isset($baseurl)) {
-        $baseurl = new moodle_url('/course/mod.php', array('sesskey' => sesskey()));
+    if (is_numeric($returnoptions) || is_null($returnoptions)) {
+        debugging(
+            'Use of numbers or null in the 2nd argument has been deprecated. Please replace it in your method calls.',
+            DEBUG_DEVELOPER,
+        );
+        $returnoptions = ['sr' => $returnoptions];
+    }
 
-        if ($sr !== null) {
-            $baseurl->param('sr', $sr);
-        }
+    if (!isset($baseurl)) {
+        $baseurl = new moodle_url('/course/mod.php', ['sesskey' => sesskey(), 'returnoptions' => $returnoptions]);
     }
 
     if ($hasmanageactivities) {
@@ -1437,7 +1474,7 @@ function course_get_cm_move(cm_info $mod, $sr = null) {
         $attributes = [
             'class' => 'editing_move',
             'data-action' => 'move',
-            'data-sectionreturn' => $sr,
+            'data-sectionreturn' => $returnoptions['sr'] ?? null,
             'title' => $str->move,
             'aria-label' => $str->move,
         ];
@@ -2410,11 +2447,12 @@ function get_sorted_course_formats($enabledonly = false) {
  * @param int|stdClass $section Section object from database or just field course_sections.section
  *     if omitted the course view page is returned
  * @param array $options options for view URL. At the moment core uses:
+ *     'pagesectionid' (int) the section ID of the page to display (null or 0 for course main page)
+ *     'sr' (int) the section number of the page to display (deprecated since Moodle 5.3)
  *     'navigation' (bool) if true and section has no separate page, the function returns null
- *     'sr' (int) used by multipage formats to specify to which section to return
  * @return moodle_url|null The url of course
  */
-function course_get_url($courseorid, $section = null, $options = array()) {
+function course_get_url($courseorid, $section = null, $options = []) {
     return course_get_format($courseorid)->get_view_url($section, $options);
 }
 
@@ -2518,7 +2556,7 @@ function mod_duplicate_activity($course, $cm, $sr = null) {
         $format = course_get_format($course);
         $renderer = $format->get_renderer($PAGE);
         $modinfo = $format->get_modinfo();
-        $section = $modinfo->get_section_info($newcm->sectionnum);
+        $section = $modinfo->get_section_info_by_id($newcm->sectionid);
 
         // Get the new element html content.
         $resp->fullcontent = $renderer->course_section_updated_cm_item($format, $section, $newcm);
@@ -2950,7 +2988,7 @@ function course_get_tagged_course_modules($tag, $exclusivemode = false, $fromcon
             $course = $builder->get_course($item->courseid);
             $modinfo = get_fast_modinfo($course);
             $cm = $modinfo->get_cm($item->cmid);
-            $courseurl = course_get_url($item->courseid, $cm->sectionnum);
+            $courseurl = course_get_url($item->courseid, $cm->get_section_info());
             $cmname = $cm->get_formatted_name();
             if (!$exclusivemode) {
                 $cmname = shorten_text($cmname, 100);
@@ -2999,6 +3037,7 @@ function course_get_user_navigation_options($context, $course = null) {
         'blogs' => false,
         'competencies' => false,
         'grades' => false,
+        'learningoutcomes' => false,
         'notes' => false,
         'participants' => false,
         'search' => false,
@@ -3087,6 +3126,7 @@ function course_get_user_navigation_options($context, $course = null) {
 
     if ($isloggedin && !$isfrontpage) {
         $options->overview = has_capability('moodle/course:viewoverview', $context);
+        $options->learningoutcomes = !empty($CFG->enableoutcomes);
     }
 
     return $options;

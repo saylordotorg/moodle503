@@ -209,7 +209,7 @@ EOD;
         }
 
         if (isset($record['password'])) {
-            $record['password'] = hash_internal_user_password($record['password']);
+            $record['password'] = \core\di::get(\core\authentication\password::class)->hash($record['password']);
         }
 
         if (!isset($record['email'])) {
@@ -227,7 +227,7 @@ EOD;
         $tobedeleted = !empty($record['deleted']);
         unset($record['deleted']);
 
-        $userid = user_create_user($record, false, false);
+        $userid = \core\user::create_user((object) $record, false, false);
 
         if ($extrafields = array_intersect_key($record, ['password' => 1, 'timecreated' => 1])) {
             $DB->update_record('user', ['id' => $userid] + $extrafields);
@@ -1332,8 +1332,8 @@ EOD;
                 break;
             case 'site':
                 unset($record->categoryid);
-                unset($record->courseid);
                 unset($record->groupid);
+                $record->courseid = SITEID;
                 break;
         }
 

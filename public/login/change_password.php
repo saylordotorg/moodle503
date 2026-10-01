@@ -90,7 +90,7 @@ if (is_mnet_remote_user($USER)) {
 }
 
 // load the appropriate auth plugin
-$userauth = get_auth_plugin($USER->auth);
+$userauth = \core\di::get(\core\authentication::class)->get_plugin($USER->auth);
 
 if (!$userauth->can_change_password()) {
     throw new \moodle_exception('nopasswordchange', 'auth');
@@ -115,7 +115,7 @@ if ($mform->is_cancelled()) {
         throw new \moodle_exception('errorpasswordupdate', 'auth');
     }
 
-    user_add_password_history($USER->id, $data->newpassword1);
+    \core\user::add_password_history($USER->id, $data->newpassword1);
 
     // Log out all other sessions if mandated by admin, or if set by the user.
     if (!empty($CFG->passwordchangelogout) || !empty($data->logoutothersessions)) {

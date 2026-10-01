@@ -75,7 +75,7 @@ class user_editadvanced_form extends moodleform {
         $cannotchangepass = array();
         $cannotchangeusername = array();
         foreach ($auths as $auth => $unused) {
-            $authinst = get_auth_plugin($auth);
+            $authinst = \core\di::get(\core\authentication::class)->get_plugin($auth);
 
             if (!$authinst->is_internal()) {
                 $cannotchangeusername[] = $auth;
@@ -90,14 +90,14 @@ class user_editadvanced_form extends moodleform {
                     $cannotchangepass[] = $auth;
                 }
             }
-            if (is_enabled_auth($auth)) {
+            if (\core\di::get(\core\authentication::class)->is_enabled($auth)) {
                 $authoptions[$enabled][$auth] = get_string('pluginname', "auth_{$auth}");
             } else {
                 $authoptions[$disabled][$auth] = get_string('pluginname', "auth_{$auth}");
             }
         }
 
-        $purpose = user_edit_map_field_purpose($userid, 'username');
+        $purpose = \core\user::edit_map_field_purpose($userid, 'username');
         $mform->addElement('text', 'username', get_string('username'), 'size="20"' . $purpose);
         $mform->addHelpButton('username', 'username', 'auth');
         $mform->setType('username', PARAM_RAW);
@@ -119,7 +119,7 @@ class user_editadvanced_form extends moodleform {
             $mform->addElement('static', 'passwordpolicyinfo', '', print_password_policy());
         }
 
-        $purpose = user_edit_map_field_purpose($userid, 'password');
+        $purpose = \core\user::edit_map_field_purpose($userid, 'password');
         $mform->addElement('passwordunmask', 'newpassword', get_string('newpassword'),
             'maxlength="'.MAX_PASSWORD_CHARACTERS.'" size="20"' . $purpose);
         $mform->addRule('newpassword', get_string('maximumchars', '', MAX_PASSWORD_CHARACTERS),
@@ -277,11 +277,11 @@ class user_editadvanced_form extends moodleform {
         } else {
             if (!empty($usernew->newpassword)) {
                 $errmsg = ''; // Prevent eclipse warning.
-                if (!check_password_policy($usernew->newpassword, $errmsg, $usernew)) {
+                if (!\core\di::get(\core\authentication\password::class)->check_policy($usernew->newpassword, $errmsg, $usernew)) {
                     $err['newpassword'] = $errmsg;
                 }
             } else if (!$user) {
-                $auth = get_auth_plugin($usernew->auth);
+                $auth = \core\di::get(\core\authentication::class)->get_plugin($usernew->auth);
                 if ($auth->is_internal()) {
                     // Internal accounts require password!
                     $err['newpassword'] = get_string('required');
@@ -325,6 +325,8 @@ class user_editadvanced_form extends moodleform {
             }
         }
 
+        $err += useredit_validate_description_length((array)$usernew);
+
         // Next the customisable profile fields.
         $err += profile_validation($usernew, $files);
 
@@ -335,5 +337,3 @@ class user_editadvanced_form extends moodleform {
         }
     }
 }
-
-

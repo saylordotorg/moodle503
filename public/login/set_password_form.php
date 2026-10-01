@@ -119,13 +119,13 @@ class login_set_password_form extends moodleform {
         }
 
         $errmsg = ''; // Prevents eclipse warnings.
-        if (!check_password_policy($data['password'], $errmsg, $user)) {
+        if (!\core\di::get(\core\authentication\password::class)->check_policy($data['password'], $errmsg, $user)) {
             $errors['password'] = $errmsg;
             $errors['password2'] = $errmsg;
             return $errors;
         }
 
-        if (user_is_previously_used_password($user->id, $data['password'])) {
+        if (\core\user::is_previously_used_password($user->id, $data['password'])) {
             $errors['password'] = get_string('errorpasswordreused', 'core_auth');
             $errors['password2'] = get_string('errorpasswordreused', 'core_auth');
         }

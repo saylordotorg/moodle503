@@ -26,6 +26,8 @@ defined('MOODLE_INTERNAL') || die;
 
 require_once($CFG->dirroot.'/course/renderer.php');
 
+use core_course\management\helper;
+
 /**
  * Main renderer for the course management pages.
  *
@@ -250,9 +252,9 @@ class core_course_management_renderer extends plugin_renderer_base {
             $textattributes['aria-label'] = $textlabel;
         }
         $html .= html_writer::link($viewcaturl, $text, $textattributes);
-        $html .= html_writer::start_div('float-end d-flex');
+        $html .= html_writer::start_div('float-end d-flex flex-wrap justify-content-end');
         if ($category->idnumber) {
-            $html .= html_writer::tag('span', s($category->idnumber), array('class' => 'text-muted idnumber'));
+            $html .= html_writer::tag('span', s($category->idnumber), ['class' => 'text-muted text-break idnumber']);
         }
         if ($hasactions) {
             $html .= $this->category_listitem_actions($category, $actions);
@@ -628,9 +630,16 @@ class core_course_management_renderer extends plugin_renderer_base {
         $html .= html_writer::link(
             $viewcourseurl, $text, array('class' => 'text-break col ps-0 mb-2 coursename aalink')
         );
-        $html .= html_writer::start_div('flex-shrink-0 ms-auto');
         if ($course->idnumber) {
-            $html .= html_writer::tag('span', s($course->idnumber), array('class' => 'text-muted idnumber'));
+            $html .= html_writer::tag(
+                'span',
+                s($course->idnumber),
+                ['class' => 'text-muted text-break align-self-baseline idnumber']
+            );
+        }
+        $html .= html_writer::start_div('flex-shrink-0 ms-auto d-flex align-items-center');
+        if ($course->deletioninprogress == helper::COURSE_DELETION_IN_PROGRESS) {
+            $html .= $this->render_course_scheduled_for_deletion_badge();
         }
         $html .= $this->course_listitem_actions($category, $course);
         $html .= html_writer::end_div();
@@ -959,6 +968,9 @@ class core_course_management_renderer extends plugin_renderer_base {
         $attributes = array();
         if (!is_null($id)) {
             $attributes['id'] = $id;
+            // The id is the target of an accessible skip link (see accessible_skipto_links()).
+            // Make it focusable so activating the skip link moves keyboard focus here.
+            $attributes['tabindex'] = -1;
         }
         return html_writer::start_div($class . " grid_column_start", $attributes);
     }
@@ -1236,9 +1248,12 @@ class core_course_management_renderer extends plugin_renderer_base {
         $html .= html_writer::end_div();
         $html .= html_writer::link($viewcourseurl, $text, array('class' => 'float-start coursename aalink'));
         $html .= html_writer::tag('span', $categoryname, array('class' => 'float-start ms-3 text-muted'));
-        $html .= html_writer::start_div('float-end');
+        $html .= html_writer::start_div('float-end d-flex flex-wrap justify-content-end align-items-center');
+        if ($course->deletioninprogress == helper::COURSE_DELETION_IN_PROGRESS) {
+            $html .= $this->render_course_scheduled_for_deletion_badge();
+        }
         $html .= $this->search_listitem_actions($course);
-        $html .= html_writer::tag('span', s($course->idnumber), array('class' => 'text-muted idnumber'));
+        $html .= html_writer::tag('span', s($course->idnumber), ['class' => 'text-muted text-break idnumber']);
         $html .= html_writer::end_div();
         $html .= html_writer::end_div();
         $html .= html_writer::end_tag('li');
@@ -1257,6 +1272,12 @@ class core_course_management_renderer extends plugin_renderer_base {
             array('courseid' => $course->id, 'categoryid' => $course->category, 'sesskey' => sesskey())
         );
         $actions = array();
+
+        // If the course is marked for deletion, no more actions should be possible.
+        if ($course->deletioninprogress == helper::COURSE_DELETION_IN_PROGRESS) {
+            return '';
+        }
+
         // Edit.
         if ($course->can_access()) {
             if ($course->can_edit()) {
@@ -1307,7 +1328,7 @@ class core_course_management_renderer extends plugin_renderer_base {
      * @return string
      */
     public function accessible_skipto_links($displaycategorylisting, $displaycourselisting, $displaycoursedetail) {
-        $html = html_writer::start_div('skiplinks accesshide');
+        $html = html_writer::start_div('skiplinks');
         $url = new moodle_url($this->page->url);
         if ($displaycategorylisting) {
             $url->set_anchor('category-listing');
@@ -1333,5 +1354,17 @@ class core_course_management_renderer extends plugin_renderer_base {
      */
     public function render_action_bar(\core_course\output\manage_categories_action_bar $actionbar): string {
         return $this->render_from_template('core_course/manage_category_actionbar', $actionbar->export_for_template($this));
+    }
+
+    /**
+     * Renders a badge that indicates that a course is scheduled for deletion.
+     * @return string the HTML string for the badge
+     */
+    public function render_course_scheduled_for_deletion_badge(): string {
+        return html_writer::tag(
+            'span',
+            get_string('coursetobedeleted', 'course'),
+            ['class' => 'badge bg-secondary text-dark rounded-pill me-2']
+        );
     }
 }

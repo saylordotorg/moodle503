@@ -24,7 +24,7 @@
     }
 
     .dropdown-subpanel.content-displayed {
-        background-color: $gray-200;
+        background-color: var(--#{$prefix}gray-200);
     }
 
     .dropdown-subpanel-content {
@@ -36,12 +36,35 @@
         @include optional-animation(0.15s animate-pop);
     }
 
+    // Fix subpanel position to be aligned with the parent item.
+    // Only applies when the subpanel is anchored via its top edge (placement ending in "-start").
+    // Placements ending in "-end" are anchored via their bottom edge (bottom: 0), so forcing
+    // "top" here as well would over-constrain the box height and make its content overflow.
+    .dropstart,
+    .dropend {
+        .dropdown-subpanel-content.dropdown-menu[data-bs-popper][data-popper-placement$="-start"] {
+            /* stylelint-disable declaration-no-important */
+            top: calc(-#{$dropdown-header-padding-y} - #{$dropdown-border-width}) !important;
+            /* stylelint-enable declaration-no-important */
+        }
+    }
+
     // Chevrons in sub panel items are always to end.
-    .dropdown-subpanel .dropdown-item {
+    .dropdown-subpanel > .dropdown-item {
+        display: inline-flex;
+        align-items: center;
+        gap: map-get($spacers, 1);
+
         &::after {
+            display: inline-block;
             border: 0;
             font: var(--fa-font-solid);
             content: fa-content($fa-var-chevron-right);
+            margin-left: auto;
+
+            .dir-rtl & {
+                content: fa-content($fa-var-chevron-left);
+            }
         }
 
         &::before {
@@ -52,27 +75,11 @@
 
 @keyframes animate-pop {
     0% {
-        transform: scale(0.90, 0.90);
+        scale: 0.90;
     }
 
     100% {
-        transform: scale(1, 1);
-    }
-}
-
-.dir-rtl .action-menu {
-
-    // Chevrons in subpanels items are always to end.
-    .dropdown-subpanel .dropdown-item {
-        &::after {
-            border: 0;
-            font: var(--fa-font-solid);
-            content: fa-content($fa-var-chevron-left);
-        }
-
-        &::before {
-            display: none;
-        }
+        scale: 1;
     }
 }
 
@@ -81,7 +88,7 @@
     a {
         display: block;
         width: 100%;
-        color: $body-color;
+        color: var(--#{$prefix}body-color);
     }
 
     &.active,

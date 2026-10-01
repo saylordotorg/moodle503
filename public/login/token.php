@@ -34,21 +34,24 @@ if (!$CFG->enablewebservices) {
     throw new moodle_exception('enablewsdescription', 'webservice');
 }
 
-// This script is used by the mobile app to check that the site is available and web services
-// are allowed. In this mode, no further action is needed.
-if (optional_param('appsitecheck', 0, PARAM_INT)) {
-    echo json_encode((object)['appsitecheck' => 'ok']);
-    exit;
+if (isset($_GET['username']) || isset($_GET['password'])) {
+    throw new coding_exception('Username and password can only be sent via POST parameters for security reasons.');
 }
 
 $username = required_param('username', PARAM_USERNAME);
 $password = required_param('password', PARAM_RAW);
-$serviceshortname  = required_param('service',  PARAM_ALPHANUMEXT);
+$serviceshortname = required_param('service', PARAM_ALPHANUMEXT);
+
+// Check if the service exists and is enabled.
+$service = $DB->get_record('external_services', ['shortname' => $serviceshortname, 'enabled' => 1]);
+if (empty($service)) {
+    throw new moodle_exception('servicenotavailable', 'webservice');
+}
 
 echo $OUTPUT->header();
 
 $username = trim(core_text::strtolower($username));
-if (is_restored_user($username)) {
+if (\core\di::get(\core\authentication::class)->is_restored_user($username)) {
     throw new moodle_exception('restoredaccountresetpassword', 'webservice');
 }
 
@@ -57,40 +60,25 @@ $systemcontext = context_system::instance();
 $reason = null;
 $user = authenticate_user_login($username, $password, false, $reason, false);
 if (!empty($user)) {
+    $uservalidator = \core\di::get(\core_auth\validate_user::class);
 
-    // Cannot authenticate unless maintenance access is granted.
-    $hasmaintenanceaccess = has_capability('moodle/site:maintenanceaccess', $systemcontext, $user);
-    if (!empty($CFG->maintenance_enabled) and !$hasmaintenanceaccess) {
-        throw new moodle_exception('sitemaintenance', 'admin');
-    }
-
-    if (isguestuser($user)) {
-        throw new moodle_exception('noguest');
-    }
-    if (empty($user->confirmed)) {
-        throw new moodle_exception('usernotconfirmed', 'moodle', '', $user->username);
-    }
-    // check credential expiry
-    $userauth = get_auth_plugin($user->auth);
-    if (!empty($userauth->config->expiration) and $userauth->config->expiration == 1) {
-        $days2expire = $userauth->password_expire($user->username);
-        if (intval($days2expire) < 0 ) {
-            throw new moodle_exception('passwordisexpired', 'webservice');
-        }
+    try {
+        $uservalidator->validate_before_token_login($user);
+    } catch (\core_auth\exception\maintenance_mode_enabled_exception $e) {
+        throw new moodle_exception('sitemaintenance', 'admin', previous: $e);
+    } catch (\core_auth\exception\user_not_confirmed_exception $e) {
+        throw new moodle_exception('usernotconfirmed', 'moodle', '', $user->username, previous: $e);
+    } catch (\core_auth\exception\user_is_guest_exception $e) {
+        throw new moodle_exception('noguest', previous: $e);
+    } catch (\core_auth\exception\credentials_expired_exception $e) {
+        throw new moodle_exception('passwordisexpired', 'webservice', previous: $e);
     }
 
-    // let enrol plugins deal with new enrolments if necessary
+    // Let enrol plugins deal with new enrolments if necessary.
     enrol_check_plugins($user);
 
-    // setup user session to check capability
+    // Setup user session to check capability.
     \core\session\manager::set_user($user);
-
-    //check if the service exists and is enabled
-    $service = $DB->get_record('external_services', array('shortname' => $serviceshortname, 'enabled' => 1));
-    if (empty($service)) {
-        // will throw exception if no token found
-        throw new moodle_exception('servicenotavailable', 'webservice');
-    }
 
     // Get an existing token or create a new one.
     $token = \core_external\util::generate_token_for_current_user($service);
@@ -99,10 +87,12 @@ if (!empty($user)) {
 
     $siteadmin = has_capability('moodle/site:config', $systemcontext, $USER->id);
 
-    $usertoken = new stdClass;
-    $usertoken->token = $token->token;
+    $usertoken = (object) [
+        'token' => $token->token,
+    ];
+
     // Private token, only transmitted to https sites and non-admin users.
-    if (is_https() and !$siteadmin) {
+    if (is_https() && !$siteadmin) {
         $usertoken->privatetoken = $privatetoken;
     } else {
         $usertoken->privatetoken = null;

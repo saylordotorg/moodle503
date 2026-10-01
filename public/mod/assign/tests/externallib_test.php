@@ -244,6 +244,8 @@ final class externallib_test extends \mod_assign\externallib_advanced_testcase {
         $assignment = $course['assignments'][0];
         $this->assertEquals($assign1->id, $assignment['id']);
         $this->assertEquals($course1->id, $assignment['course']);
+        $this->assertArrayHasKey('coursemodule', $assignment);
+        $this->assertEquals($assign1->cmid, $assignment['coursemodule']);
         $this->assertEquals('English', $assignment['name']);
         $this->assertStringContainsString('the assignment intro text here', $assignment['intro']);
         $this->assertNotEmpty($assignment['configs']);
@@ -330,6 +332,58 @@ final class externallib_test extends \mod_assign\externallib_advanced_testcase {
         $this->assertEquals(1, $assignment['blindmarking']);
         $this->assertEquals(1, $assignment['markinganonymous']);
         $this->assertEquals(0, $assignment['preventsubmissionnotingroup']);
+    }
+
+    /**
+     * Test that get_assignments returns the effective override-adjusted dates for a student with an override,
+     * not the assignment's default dates.
+     */
+    public function test_get_assignments_with_override(): void {
+        global $DB;
+
+        $this->resetAfterTest(true);
+
+        $course = self::getDataGenerator()->create_course();
+        $now = time();
+        $assign = self::getDataGenerator()->create_module('assign', [
+            'course' => $course->id,
+            'duedate' => $now + DAYSECS,
+            'cutoffdate' => $now + (2 * DAYSECS),
+            'allowsubmissionsfromdate' => $now,
+        ]);
+
+        $student = self::getDataGenerator()->create_user();
+        $studentrole = $DB->get_record('role', ['shortname' => 'student']);
+        self::getDataGenerator()->enrol_user($student->id, $course->id, $studentrole->id);
+
+        // Give this student a personal override extending their dates and time limit.
+        $override = new \stdClass();
+        $override->assignid = $assign->id;
+        $override->userid = $student->id;
+        $override->duedate = $now + (10 * DAYSECS);
+        $override->cutoffdate = $now + (11 * DAYSECS);
+        $override->allowsubmissionsfromdate = $now + (5 * DAYSECS);
+        $override->timelimit = 3600;
+        $DB->insert_record('assign_overrides', $override);
+
+        $this->setUser($student);
+
+        $result = mod_assign_external::get_assignments([$course->id]);
+        $result = external_api::clean_returnvalue(mod_assign_external::get_assignments_returns(), $result);
+
+        $this->assertCount(0, $result['warnings']);
+        $this->assertCount(1, $result['courses']);
+        $assignment = $result['courses'][0]['assignments'][0];
+
+        // The webservice must return this student's overridden dates and time limit, not the assignment defaults.
+        $this->assertEquals($override->duedate, $assignment['duedate']);
+        $this->assertEquals($override->cutoffdate, $assignment['cutoffdate']);
+        $this->assertEquals($override->allowsubmissionsfromdate, $assignment['allowsubmissionsfromdate']);
+        $this->assertEquals($override->timelimit, $assignment['timelimit']);
+        $this->assertNotEquals($assign->duedate, $assignment['duedate']);
+        $this->assertNotEquals($assign->cutoffdate, $assignment['cutoffdate']);
+        $this->assertNotEquals($assign->allowsubmissionsfromdate, $assignment['allowsubmissionsfromdate']);
+        $this->assertNotEquals(0, $assignment['timelimit']);
     }
 
     /**
@@ -2352,6 +2406,160 @@ final class externallib_test extends \mod_assign\externallib_advanced_testcase {
 
         // Test assignment data.
         $this->assertEquals(['attachments' => ['intro' => []]], $result['assignmentdata']);
+
+        // A single-marker assignment has nothing to report in markerfeedback.
+        $this->assertArrayNotHasKey('markerfeedback', $result['feedback']);
+    }
+
+    /**
+     * Find the text of a named editor field for a plugin of the given type in a get_plugins_data()-style structure.
+     *
+     * @param array $plugins the 'plugins' array returned by get_submission_status.
+     * @param string $plugintype the plugin type, for example 'comments'.
+     * @param string $fieldname the editor field name, for example 'comments'.
+     * @return string|null the field text, or null if not found.
+     */
+    private function find_editor_field_text(array $plugins, string $plugintype, string $fieldname): ?string {
+        foreach ($plugins as $plugin) {
+            if ($plugin['type'] !== $plugintype) {
+                continue;
+            }
+            foreach ($plugin['editorfields'] ?? [] as $editorfield) {
+                if ($editorfield['name'] === $fieldname) {
+                    return $editorfield['text'];
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Test that get_submission_status exposes each marker's own feedback when the assignment uses multiple
+     * markers (MDL-89346).
+     *
+     * @covers \mod_assign_external::get_submission_status
+     */
+    public function test_get_submission_status_multiple_markers(): void {
+        global $CFG;
+
+        $this->resetAfterTest(true);
+
+        $course = self::getDataGenerator()->create_course();
+        $generator = $this->getDataGenerator()->get_plugin_generator('mod_assign');
+        $instance = $generator->create_instance([
+            'course' => $course->id,
+            'assignsubmission_onlinetext_enabled' => 1,
+            'assignfeedback_comments_enabled' => 1,
+            'markingworkflow' => 1,
+            'markingallocation' => 1,
+            'markercount' => 2,
+            'multimarkmethod' => ASSIGN_MULTIMARKING_METHOD_MANUAL,
+        ]);
+        $cm = get_coursemodule_from_instance('assign', $instance->id);
+        $context = \context_module::instance($cm->id);
+        $assign = new \mod_assign_testable_assign($context, $cm, $course);
+
+        $student = self::getDataGenerator()->create_and_enrol($course, 'student');
+        $marker1 = self::getDataGenerator()->create_and_enrol($course, 'editingteacher');
+        $marker2 = self::getDataGenerator()->create_and_enrol($course, 'editingteacher');
+
+        $this->setUser($student);
+        $assign->get_user_submission($student->id, true);
+
+        $this->setAdminUser();
+
+        // Allocate two markers to the student's submission.
+        $assign->update_marker_allocations($student->id, [
+            1 => [$marker1->id],
+            2 => [$marker2->id],
+        ]);
+
+        $grade = $assign->get_user_grade($student->id, true);
+
+        // Record an individual mark and feedback comment for each marker.
+        $grade->grader = $marker1->id;
+        $assign->update_mark($grade, 80);
+        $mark1 = $assign->get_mark($grade->id, $marker1->id);
+
+        $grade->grader = $marker2->id;
+        $assign->update_mark($grade, 60);
+        $mark2 = $assign->get_mark($grade->id, $marker2->id);
+
+        $commentsplugin = $assign->get_feedback_plugin_by_type('comments');
+        $commentsplugin->set_editor_text(
+            'comments',
+            'Feedback from marker one. <img src="@@PLUGINFILE@@/pic.png">',
+            $grade->id,
+            $mark1->id
+        );
+        $commentsplugin->set_editor_text('comments', 'Feedback from marker two.', $grade->id, $mark2->id);
+
+        // Release the combined grade to the student.
+        $grade->grade = 70;
+        $assign->update_grade($grade);
+        $flags = $assign->get_user_flags($student->id, true);
+        $flags->workflowstate = ASSIGN_MARKING_WORKFLOW_STATE_RELEASED;
+        $assign->update_user_flags($flags);
+
+        $this->setUser($student);
+        $result = mod_assign_external::get_submission_status($assign->get_instance()->id);
+        // We expect debugging because of the $PAGE object, this won't happen in a normal WS request.
+        $this->assertDebuggingCalled();
+        $result = external_api::clean_returnvalue(mod_assign_external::get_submission_status_returns(), $result);
+
+        $this->assertTrue(isset($result['feedback']['markerfeedback']));
+        $this->assertCount(2, $result['feedback']['markerfeedback']);
+
+        $marker1feedback = $result['feedback']['markerfeedback'][0];
+        $this->assertEquals($marker1->id, $marker1feedback['markerid']);
+        $this->assertEquals(1, $marker1feedback['position']);
+        // The update_mark() call above did not set an explicit workflow state, so the stored
+        // assign_mark.workflowstate is an empty string. The webservice must normalise this to
+        // the 'notmarked' constant rather than returning the empty string verbatim.
+        $this->assertEquals(ASSIGN_MARKING_WORKFLOW_STATE_NOTMARKED, $marker1feedback['workflowstate']);
+        $comment1 = $this->find_editor_field_text($marker1feedback['plugins'], 'comments', 'comments');
+        $this->assertStringContainsString('Feedback from marker one.', $comment1);
+        // The embedded @@PLUGINFILE@@ token in a marker's own comment must be rewritten to a real
+        // pluginfile.php URL scoped to that marker's feedback_marker filearea/itemid, not left verbatim.
+        $this->assertStringNotContainsString('@@PLUGINFILE@@', $comment1);
+        $this->assertMatchesRegularExpression(
+            '@' . preg_quote($CFG->wwwroot, '@') .
+                '/webservice/pluginfile\.php/\d+/assignfeedback_comments/feedback_marker/' . $mark1->id . '/pic\.png@',
+            $comment1
+        );
+
+        $marker2feedback = $result['feedback']['markerfeedback'][1];
+        $this->assertEquals($marker2->id, $marker2feedback['markerid']);
+        $this->assertEquals(2, $marker2feedback['position']);
+        $this->assertEquals(ASSIGN_MARKING_WORKFLOW_STATE_NOTMARKED, $marker2feedback['workflowstate']);
+        $comment2 = $this->find_editor_field_text($marker2feedback['plugins'], 'comments', 'comments');
+        $this->assertStringContainsString('Feedback from marker two.', $comment2);
+
+        // The overall feedback plugin breakdown must not include per-marker comments.
+        $overallcomment = $this->find_editor_field_text($result['feedback']['plugins'], 'comments', 'comments');
+        $this->assertStringNotContainsString('Feedback from marker one.', (string) $overallcomment);
+        $this->assertStringNotContainsString('Feedback from marker two.', (string) $overallcomment);
+
+        // Now hide grader identities and confirm marker ids are anonymised, just like the overall grader.
+        $this->setAdminUser();
+        $instancedata = clone $assign->get_instance();
+        $instancedata->instance = $instancedata->id;
+        // Required so update_instance() keeps the existing multi-marker settings and enabled feedback
+        // plugins instead of resetting them: it only reads these from mod_form-shaped submitted data,
+        // not from the assign instance record returned by get_instance().
+        $instancedata->advancedgradingmethod_submissions = '';
+        $instancedata->assignfeedback_comments_enabled = 1;
+        $instancedata->hidegrader = true;
+        $assign->update_instance($instancedata);
+
+        $this->setUser($student);
+        $result = mod_assign_external::get_submission_status($assign->get_instance()->id);
+        $result = external_api::clean_returnvalue(mod_assign_external::get_submission_status_returns(), $result);
+
+        $this->assertCount(2, $result['feedback']['markerfeedback']);
+        foreach ($result['feedback']['markerfeedback'] as $markerfeedback) {
+            $this->assertEquals(-1, $markerfeedback['markerid']);
+        }
     }
 
     /**

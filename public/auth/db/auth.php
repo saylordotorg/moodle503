@@ -75,7 +75,7 @@ class auth_plugin_db extends auth_plugin_base {
             if (isset($this->config->removeuser) and $this->config->removeuser == AUTH_REMOVEUSER_KEEP) {
                 // No need to connect to external database in this case because users are never removed and we verify password locally.
                 if ($user = $DB->get_record('user', array('username'=>$username, 'mnethostid'=>$CFG->mnet_localhost_id, 'auth'=>$this->authtype))) {
-                    return validate_internal_user_password($user, $password);
+                    return \core\di::get(\core\authentication\password::class)->validate($user, $password);
                 } else {
                     return false;
                 }
@@ -97,7 +97,7 @@ class auth_plugin_db extends auth_plugin_base {
                 $authdb->Close();
                 // User exists externally - check username/password internally.
                 if ($user = $DB->get_record('user', array('username'=>$username, 'mnethostid'=>$CFG->mnet_localhost_id, 'auth'=>$this->authtype))) {
-                    return validate_internal_user_password($user, $password);
+                    return \core\di::get(\core\authentication\password::class)->validate($user, $password);
                 }
             } else {
                 $rs->Close();
@@ -260,7 +260,7 @@ class auth_plugin_db extends auth_plugin_base {
             // This will also update the stored hash to the latest algorithm
             // if the existing hash is using an out-of-date algorithm (or the
             // legacy md5 algorithm).
-            if (update_internal_user_password($puser, $newpassword)) {
+            if (\core\di::get(\core\authentication\password::class)->update($puser, $newpassword)) {
                 $user->password = $puser->password;
                 return true;
             } else {
@@ -345,7 +345,7 @@ class auth_plugin_db extends auth_plugin_base {
                         $updateuser = new stdClass();
                         $updateuser->id   = $user->id;
                         $updateuser->suspended = 1;
-                        user_update_user($updateuser, false);
+                        \core\user::update_user($updateuser, false);
                         $trace->output(get_string('auth_dbsuspenduser', 'auth_db', array('name'=>$user->username, 'id'=>$user->id)), 1);
                     }
                 }
@@ -439,7 +439,7 @@ class auth_plugin_db extends auth_plugin_base {
                         $updateuser = new stdClass();
                         $updateuser->id = $olduser->id;
                         $updateuser->suspended = 0;
-                        user_update_user($updateuser);
+                        \core\user::update_user($updateuser);
                         $trace->output(get_string('auth_dbreviveduser', 'auth_db', array('name' => $username,
                             'id' => $olduser->id)), 1);
                         continue;
@@ -460,7 +460,7 @@ class auth_plugin_db extends auth_plugin_base {
                     continue;
                 }
                 try {
-                    $id = user_create_user($user, false, false); // It is truly a new user.
+                    $id = \core\user::create_user($user, false, false); // It is truly a new user.
                     $trace->output(get_string('auth_dbinsertuser', 'auth_db', array('name'=>$user->username, 'id'=>$id)), 1);
                 } catch (moodle_exception $e) {
                     $trace->output(get_string('auth_dbinsertusererror', 'auth_db', $user->username), 1);

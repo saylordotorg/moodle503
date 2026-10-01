@@ -30,6 +30,8 @@
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
+use core\markdown_extra;
+
 defined('MOODLE_INTERNAL') || die();
 
 // Constants.
@@ -1107,7 +1109,7 @@ function purify_html($text, $options = array()) {
         $config = HTMLPurifier_Config::createDefault();
 
         $config->set('HTML.DefinitionID', 'moodlehtml');
-        $config->set('HTML.DefinitionRev', 7);
+        $config->set('HTML.DefinitionRev', 8);
         $config->set('CSS.Proprietary', true);
         $config->set('Cache.SerializerPath', $cachedir);
         $config->set('Cache.SerializerPermissions', $CFG->directorypermissions);
@@ -1190,8 +1192,39 @@ function purify_html($text, $options = array()) {
                 'default' => 'Bool',
             ]);
 
+            // Allow <details> and <summary> elements used by the TinyMCE Accordion plugin.
+            // The content model 'Required: summary | Flow' allows <details> elements to
+            // contain any combination of <summary> and Flow content (the | separator adds
+            // both to the allowed-elements set; multiple children of any listed type are
+            // permitted). 'Required' enforces that the element has at least one child,
+            // which is the correct behaviour for an accordion that must have content.
+            $def->addElement('details', 'Block', 'Required: summary | Flow', 'Common', [
+                'open' => 'Bool',
+            ]);
+            $def->addElement('summary', false, 'Flow', 'Common');
+
+            // Note: the advlist plugin stores list styling via the list-style-type CSS
+            // property in inline style attributes on <ul>/<ol> elements (e.g.
+            // style="list-style-type: circle;"). Most of the values advlist offers
+            // (disc, circle, square, decimal, lower/upper-roman, lower/upper-alpha, none)
+            // are already covered by HTMLPurifier's built-in CSS definition
+            // (HTMLPurifier_CSSDefinition). The lower-greek value is not in that
+            // built-in allowlist, even though it is a standard CSS2.1 counter style
+            // (see https://www.w3.org/TR/CSS21/generate.html#propdef-list-style-type),
+            // so it is added explicitly below.
+
             // Use the built-in Ruby module to add annotation support.
             $def->manager->addModule(new HTMLPurifier_HTMLModule_Ruby());
+        }
+
+        // Extend the built-in list-style-type CSS enum with lower-greek so the TinyMCE
+        // advlist plugin's lower-greek list style survives HTMLPurifier filtering. This is
+        // done via the public API (HTMLPurifier_Config::getCSSDefinition()) rather than by
+        // patching the vendored HTMLPurifier library. HTMLPurifier_CSSDefinition::doSetup()
+        // wraps every property definition in an ImportantDecorator, so the underlying
+        // Enum's valid_values list is reached via ->def.
+        if ($cssdef = $config->getCSSDefinition()) {
+            $cssdef->info['list-style-type']->def->valid_values['lower-greek'] = true;
         }
 
         $purifier = new HTMLPurifier($config);
@@ -1271,7 +1304,22 @@ function markdown_to_html($text) {
         return $text;
     }
 
-    return \Michelf\MarkdownExtra::defaultTransform($text);
+    // Reuse a single configured parser instance across calls (mirrors the caching
+    // that MarkdownExtra::defaultTransform() does internally).
+    static $markdown = null;
+    if ($markdown === null) {
+        $markdown = \core\di::get(markdown_extra::class);
+        // Render fenced code blocks with the markup that filter_codehighlighter
+        // (Prism.js) recognises: the language class must carry the "language-"
+        // prefix and must sit on the <pre> element followed by a bare <code>, so
+        // that it matches the filter's trigger pattern
+        // /<pre.+?class=".*?language-.*?"><code>/i. With the library defaults
+        // (empty prefix, class on <code>) the filter never activates.
+        $markdown->code_class_prefix = 'language-';
+        $markdown->code_attr_on_pre = true;
+    }
+
+    return $markdown->transform($text);
 }
 
 /**
